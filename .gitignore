@@ -22,3 +22,6 @@ CLAUDE.md
 # recorded lab responses (contain lab hosts/ids)
 /lab/fixtures/*
 !/lab/fixtures/.gitkeep
+
+# local lab run state (ids only)
+/lab/e2e-state.json

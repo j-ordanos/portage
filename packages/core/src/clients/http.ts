@@ -60,6 +60,26 @@ function errorForStatus(
   return new AppError("UPSTREAM_VALIDATION", message);
 }
 
+/** Best-effort short `message` from an error body ({ message, code, issues } on Dokploy). Never throws. */
+async function upstreamMessage(
+  response: Response,
+): Promise<string | undefined> {
+  try {
+    const text = await response.text();
+    if (!text || text.trimStart().startsWith("<")) return undefined;
+    const parsed: unknown = JSON.parse(text);
+    const message =
+      parsed && typeof parsed === "object" && "message" in parsed
+        ? (parsed as { message?: unknown }).message
+        : undefined;
+    return typeof message === "string" && message
+      ? message.replace(/\s+/g, " ").slice(0, 200)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function requestUpstream(
   options: RequestOptions,
 ): Promise<unknown> {
@@ -115,9 +135,12 @@ export async function requestUpstream(
 
       if (!response.ok) {
         const retryAfter = response.headers.get("retry-after") ?? undefined;
+        const detail = await upstreamMessage(response);
         const appError = errorForStatus(
           response.status,
-          "Upstream request failed",
+          detail
+            ? `Upstream rejected the request: ${detail}`
+            : "Upstream request failed",
           retryAfter,
         );
         if (appError.retryable && attempt < retries) {

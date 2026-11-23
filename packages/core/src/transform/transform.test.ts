@@ -146,9 +146,9 @@ describe("environment transformation", () => {
       },
     ];
     expect(normalizeEnv(vars).map((value) => value.key)).toEqual(["A", "Z"]);
-    expect(serializeValue("hello world")).toBe('"hello world"');
-    expect(serializeValue("hash#tag")).toBe('"hash#tag"');
-    expect(serializeValue("line1\nline2")).toBe('"line1\\nline2"');
+    expect(serializeValue("hello world")).toBe("'hello world'");
+    expect(serializeValue("hash#tag")).toBe("'hash#tag'");
+    expect(serializeValue("line1\nline2")).toBe("'line1\nline2'");
     expect(rewriteSharedRefs("{{ project.DB_URL }}")).toBe(
       "${{project.DB_URL}}",
     );

@@ -1,3 +1,4 @@
+import { splitDatabaseTarget } from "../apply/executor.js";
 import type { DokployClient } from "../clients/dokploy.js";
 import { AppError } from "../errors.js";
 import { type Plan, Plan as PlanSchema, type Step } from "../plan/types.js";
@@ -110,19 +111,9 @@ export async function executeRollbackStep(
         await dokploy.composeDelete(targetId);
         break;
       case "database": {
-        const engine =
-          typeof step.payload.engine === "string" &&
-          ["postgres", "mysql", "mariadb", "mongo", "redis"].includes(
-            step.payload.engine,
-          )
-            ? (step.payload.engine as
-                | "postgres"
-                | "mysql"
-                | "mariadb"
-                | "mongo"
-                | "redis")
-            : "postgres";
-        await dokploy.databaseDelete(engine, targetId);
+        // The engine is stored with the id (`postgres:abc`); never guess it.
+        const { engine, id } = splitDatabaseTarget(targetId);
+        await dokploy.databaseDelete(engine, id);
         break;
       }
       case "environment":

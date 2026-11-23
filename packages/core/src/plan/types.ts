@@ -54,8 +54,14 @@ export const Options = z
     target: z.object({
       serverId: z.string().optional(),
       envStrategy: z.enum(["map", "flatten"]),
+      /** suffix = still migrate, but mark the new copy with `collisionMarker` (default "*"). */
       collisionPolicy: z.enum(["adopt", "suffix", "skip"]),
       suffix: z.string().optional(),
+      collisionMarker: z.string().min(1).max(8).default("*"),
+      /** Dokploy GitHub provider id used for private GitHub App repos; otherwise they are linked by URL and flagged. */
+      githubProviderId: z.string().optional(),
+      /** Dokploy SSH key id used for deploy-key repos. */
+      sshKeyId: z.string().optional(),
     }),
     secrets: z.object({
       defaultMode: z.enum(["names-only", "import-values", "prompt"]),
@@ -71,3 +77,14 @@ export const Options = z
   .passthrough();
 
 export type Options = z.infer<typeof Options>;
+
+/** Sensible defaults: migrate everything selected, import values, mark name collisions with `*`. */
+export function defaultOptions(includeSrcIds: string[]): Options {
+  return Options.parse({
+    selection: { includeSrcIds, decisions: {} },
+    target: { envStrategy: "map", collisionPolicy: "suffix" },
+    secrets: { defaultMode: "import-values", perVar: {} },
+    domains: { policy: "keep-original", map: {} },
+    updateAdopted: false,
+  });
+}

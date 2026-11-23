@@ -10,7 +10,8 @@
     "test": "pnpm -r test",
     "hash-password": "pnpm --filter @migrator/server hash-password",
     "fixtures:sanitize": "node scripts/sanitize-fixtures.mjs",
-    "fixtures:record": "node scripts/record-fixtures.mjs"
+    "fixtures:record": "node scripts/record-fixtures.mjs",
+    "e2e:lab": "node scripts/e2e-lab.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.0.6",

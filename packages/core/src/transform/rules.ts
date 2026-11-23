@@ -39,12 +39,16 @@ function applicationIssues(resource: IRApplication, ctx: RuleContext): Issue[] {
     });
   }
   if (resource.build.pack === "railpack") {
-    if (!ctx.supportedBuildTypes?.includes("railpack")) {
+    // Dokploy v0.31.4 supports railpack natively (verified); only warn when the target is known to lack it.
+    if (
+      ctx.supportedBuildTypes &&
+      !ctx.supportedBuildTypes.includes("railpack")
+    ) {
       issues.push({
         ruleId: "R-012",
         severity: "warn",
-        message: "Railpack is not confirmed by the target",
-        fix: "Mapped to nixpacks; verify build behavior.",
+        message: "This Dokploy version does not support Railpack",
+        fix: "Switch the app to nixpacks in Dokploy and verify the build.",
       });
     }
   }

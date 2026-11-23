@@ -95,6 +95,9 @@ importers:
         specifier: 3.25.67
         version: 3.25.67
     devDependencies:
+      dotenv:
+        specifier: 17.2.1
+        version: 17.2.1
       msw:
         specifier: 2.10.2
         version: 2.10.2(@types/node@24.0.10)(typescript@5.8.3)
