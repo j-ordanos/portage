@@ -26,6 +26,19 @@ export interface CoolifyReader {
   getApplication(uuid: string): Promise<unknown>;
   getApplicationEnvs(uuid: string): Promise<unknown[]>;
   getApplicationStorages(uuid: string): Promise<unknown[]>;
+  /** Authoritative grouping: applications/databases/services that live in one environment. */
+  getEnvironment(
+    projectUuid: string,
+    environmentName: string,
+  ): Promise<unknown>;
+  getDatabase(uuid: string): Promise<unknown>;
+  getDatabaseEnvs(uuid: string): Promise<unknown[]>;
+  getDatabaseStorages(uuid: string): Promise<unknown[]>;
+  getDatabaseBackups(uuid: string): Promise<unknown[]>;
+  getService(uuid: string): Promise<unknown>;
+  getServiceEnvs(uuid: string): Promise<unknown[]>;
+  getServiceStorages(uuid: string): Promise<unknown[]>;
+  listGithubApps(): Promise<unknown[]>;
 }
 
 export function createCoolifyReader(
@@ -49,11 +62,33 @@ export function createCoolifyReader(
     );
   };
 
+  const storages = async (path: string): Promise<unknown[]> => {
+    const value = await get(path);
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      const persistent = Array.isArray(record.persistent_storages)
+        ? record.persistent_storages
+        : [];
+      const files = Array.isArray(record.file_storages)
+        ? record.file_storages
+        : [];
+      return [...persistent, ...files];
+    }
+    throw new AppError(
+      "SCHEMA_DRIFT",
+      "Coolify storage response did not match the expected shape",
+    );
+  };
+
   return {
     async probe() {
       let version = "unknown";
       try {
         const raw = await get("/api/v1/version");
+        if (typeof raw === "string" && raw.trim()) {
+          version = raw.trim();
+        }
         const parsed = CoolifyVersion.safeParse(raw);
         if (parsed.success) {
           version =
@@ -91,25 +126,24 @@ export function createCoolifyReader(
     async getApplicationEnvs(uuid) {
       return list(`/api/v1/applications/${encodeURIComponent(uuid)}/envs`);
     },
-    async getApplicationStorages(uuid) {
-      const value = await get(
-        `/api/v1/applications/${encodeURIComponent(uuid)}/storages`,
-      );
-      if (Array.isArray(value)) return value;
-      if (value && typeof value === "object") {
-        const record = value as Record<string, unknown>;
-        const persistent = Array.isArray(record.persistent_storages)
-          ? record.persistent_storages
-          : [];
-        const files = Array.isArray(record.file_storages)
-          ? record.file_storages
-          : [];
-        return [...persistent, ...files];
-      }
-      throw new AppError(
-        "SCHEMA_DRIFT",
-        "Coolify storage response did not match the expected shape",
-      );
-    },
+    getApplicationStorages: (uuid) =>
+      storages(`/api/v1/applications/${encodeURIComponent(uuid)}/storages`),
+    getEnvironment: (projectUuid, environmentName) =>
+      get(
+        `/api/v1/projects/${encodeURIComponent(projectUuid)}/${encodeURIComponent(environmentName)}`,
+      ),
+    getDatabase: (uuid) => get(`/api/v1/databases/${encodeURIComponent(uuid)}`),
+    getDatabaseEnvs: (uuid) =>
+      list(`/api/v1/databases/${encodeURIComponent(uuid)}/envs`),
+    getDatabaseStorages: (uuid) =>
+      storages(`/api/v1/databases/${encodeURIComponent(uuid)}/storages`),
+    getDatabaseBackups: (uuid) =>
+      list(`/api/v1/databases/${encodeURIComponent(uuid)}/backups`),
+    getService: (uuid) => get(`/api/v1/services/${encodeURIComponent(uuid)}`),
+    getServiceEnvs: (uuid) =>
+      list(`/api/v1/services/${encodeURIComponent(uuid)}/envs`),
+    getServiceStorages: (uuid) =>
+      storages(`/api/v1/services/${encodeURIComponent(uuid)}/storages`),
+    listGithubApps: () => list("/api/v1/github-apps"),
   };
 }

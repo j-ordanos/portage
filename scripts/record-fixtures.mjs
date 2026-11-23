@@ -40,6 +40,10 @@ function sanitize(node, parentKey = "") {
     return out;
   }
   if (typeof node === "string" && node.length > 0) {
+    // URLs with embedded credentials (postgres://user:pass@host) -> keep scheme/host, drop userinfo
+    if (/^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^@\s]+@/i.test(node)) {
+      return node.replace(/\/\/[^/\s:@]+:[^@\s]+@/, "//<redacted>@");
+    }
     if (COMPOSE.test(parentKey) && !KEEP_COMPOSE)
       return `<redacted:${node.length} chars>`;
     const isEnvKeyName = parentKey === "key" || parentKey === "name";

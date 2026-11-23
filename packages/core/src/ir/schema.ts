@@ -66,6 +66,8 @@ export const Source = z.discriminatedUnion("type", [
         "other",
       ]),
       commit: z.string().optional(),
+      url: z.string().optional(),
+      sshKeyRef: z.string().optional(),
     })
     .passthrough(),
   z
@@ -94,6 +96,7 @@ export const Build = z
     installCmd: z.string().optional(),
     buildCmd: z.string().optional(),
     startCmd: z.string().optional(),
+    dockerBuildStage: z.string().optional(),
     rawPack: z.string(),
   })
   .passthrough();
@@ -129,6 +132,8 @@ export const IRCompose = ResourceBase.extend({
   composeRaw: z.string(),
   isTemplateService: z.boolean(),
   templateName: z.string().optional(),
+  source: Source.optional(),
+  composePath: z.string().optional(),
   domains: z.array(Domain.extend({ service: z.string() })),
   env: z.array(EnvVar),
   mounts: z.array(Mount),
@@ -141,6 +146,7 @@ export const IRDatabase = ResourceBase.extend({
   dbName: z.string().optional(),
   dbUser: z.string().optional(),
   passwordRef: z.string().nullable(),
+  rootPasswordRef: z.string().nullable().optional(),
   passwordAvailability: Availability,
   publiclyExposed: z.boolean(),
   publicPort: z.number().optional(),

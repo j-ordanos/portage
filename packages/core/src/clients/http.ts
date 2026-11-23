@@ -139,6 +139,12 @@ export async function requestUpstream(
       const contentType =
         response.headers.get("content-type")?.toLowerCase() ?? "";
       if (
+        /^[\w.+-]{1,64}$/.test(text.trim()) &&
+        !contentType.includes("json")
+      ) {
+        return text.trim(); // plain-text body, e.g. Coolify GET /version -> 4.7.5
+      }
+      if (
         contentType.includes("text/html") ||
         text.trimStart().startsWith("<")
       ) {
