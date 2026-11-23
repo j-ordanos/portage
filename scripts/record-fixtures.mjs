@@ -89,9 +89,9 @@ async function coolify() {
     return note("coolify: skipped (COOLIFY_URL / COOLIFY_TOKEN not set)");
   const h = { Authorization: `Bearer ${token}`, Accept: "application/json" };
   const v = await get(base, "/api/v1/version", h);
-  const version =
-    typeof v.body === "string" ? v.body : (v.body?.version ?? "unknown");
-  const ver = String(typeof v.body?.text === "string" ? v.body.text : version);
+  const ver = String(
+    v.body?._nonJson ? v.body.preview.trim() : (v.body?.version ?? "unknown"),
+  );
   const rec = async (name, path) => {
     const r = await get(base, path, h);
     save("coolify", ver, name, r);
