@@ -76,6 +76,9 @@ export function createApp(options: AppOptions) {
       : {}),
   });
   const attempts = new Map<string, { count: number; resetAt: number }>();
+  const publicOrigin = config.PUBLIC_URL
+    ? new URL(config.PUBLIC_URL).origin
+    : undefined;
   const secureCookie = Boolean(config.PUBLIC_URL?.startsWith("https://"));
   const cookieName = secureCookie ? "__Host-portage" : "portage_session";
   const app = new Hono<Env>();
@@ -124,13 +127,18 @@ export function createApp(options: AppOptions) {
     if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method)) {
       const origin = c.req.header("Origin");
       if (origin) {
-        let host: string;
+        let parsed: URL;
         try {
-          host = new URL(origin).host;
+          parsed = new URL(origin);
         } catch {
           return c.json({ message: "Invalid Origin header" }, 403);
         }
-        if (host !== c.req.header("Host"))
+        // Same host, or the one public address the operator declared (needed when a front end such as Vercel
+        // forwards /api here: the browser's Origin is the front end's address, not this server's).
+        if (
+          parsed.host !== c.req.header("Host") &&
+          parsed.origin !== publicOrigin
+        )
           return c.json({ message: "Origin does not match this server" }, 403);
       }
     }

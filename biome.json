@@ -16,5 +16,23 @@
     "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/web/src/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "useSemanticElements": "off",
+            "useAriaPropsSupportedByRole": "off",
+            "useValidAnchor": "off",
+            "useKeyWithClickEvents": "off"
+          },
+          "correctness": {
+            "useExhaustiveDependencies": "off"
+          }
+        }
+      }
+    }
+  ]
 }

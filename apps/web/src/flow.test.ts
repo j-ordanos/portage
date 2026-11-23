@@ -91,3 +91,66 @@ describe("todoItems", () => {
     expect(todoItems("# nothing")).toEqual([]);
   });
 });
+
+describe("router", () => {
+  it("parses every route and builds the same link back", async () => {
+    const { parse, href } = await import("./router");
+    const cases = [
+      "#/",
+      "#/docs",
+      "#/docs/security",
+      "#/settings",
+      "#/settings/account",
+      "#/new",
+      "#/run/abc123",
+      "#/run/abc123/review",
+    ];
+    for (const hash of cases) expect(href(parse(hash)), hash).toBe(hash);
+    expect(parse("")).toEqual({ page: "home" });
+    expect(parse("#/run")).toEqual({ page: "home" });
+    expect(parse("#/nonsense")).toEqual({ page: "home" });
+    expect(parse("#/run/xyz/finish")).toEqual({
+      page: "run",
+      id: "xyz",
+      stage: "finish",
+    });
+  });
+});
+
+describe("relative time", () => {
+  it("speaks plainly about when something happened", async () => {
+    const { ago } = await import("./ui");
+    const now = 1_000_000_000_000;
+    expect(ago(now - 10_000, now)).toBe("just now");
+    expect(ago(now - 5 * 60_000, now)).toBe("5 min ago");
+    expect(ago(now - 3 * 3_600_000, now)).toBe("3 h ago");
+    expect(ago(now - 2 * 86_400_000, now)).toBe("2 d ago");
+  });
+});
+
+describe("plain-language helpers", () => {
+  it("never shows a double v, a rule id, or an unfinished sentence", async () => {
+    const { ver, plural, plain, sentence } = await import("./ui");
+    expect(ver("v0.31.4")).toBe("v0.31.4");
+    expect(ver("4.7.5")).toBe("v4.7.5");
+    expect(ver(null)).toBe("");
+    expect(plural(1, "resource")).toBe("1 resource");
+    expect(plural(0, "resource")).toBe("0 resources");
+    expect(plain("R-073: One-click template settings require re-entry")).toBe(
+      "One-click template settings require re-entry",
+    );
+    expect(plain("Git access linked: yes")).toBe("Git access linked: yes");
+    expect(
+      sentence(
+        "Database definition is copied; data is not",
+        "Create and restore a backup separately",
+      ),
+    ).toBe(
+      "Database definition is copied; data is not. Create and restore a backup separately.",
+    );
+    expect(sentence("Already ends well.", "Fix it.")).toBe(
+      "Already ends well. Fix it.",
+    );
+    expect(sentence("No fix")).toBe("No fix.");
+  });
+});

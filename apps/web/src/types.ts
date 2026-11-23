@@ -171,3 +171,14 @@ export interface GitView {
   ssh: Array<{ sshKeyId: string; label: string }>;
   resources: GitResource[];
 }
+
+export interface Connection {
+  id: string;
+  kind: "coolify" | "dokploy";
+  name: string;
+  url: string;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt: number | null;
+  check: { ok: boolean; version?: string; message?: string; at: number } | null;
+}

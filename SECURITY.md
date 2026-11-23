@@ -1,32 +1,33 @@
 # Security
 
-This application holds infrastructure credentials and transient source secrets.
-Run it only on infrastructure you control.
+Portage holds keys to your infrastructure, so it keeps as little as possible for as short a time as possible.
 
-## Secrets
+## What is stored, and how
 
-- `MASTER_KEY` is 32 bytes and is never stored in SQLite.
-- Credentials and secret values use AES-256-GCM sealed records.
-- Vault and credential records are scoped to a run.
-- IR, plans, manifests, reports, logs, and browser storage must not contain secret values.
-- The tool never changes or deletes Coolify resources.
+| Data | Storage |
+|---|---|
+| Account password | argon2id hash. |
+| Saved Coolify tokens and Dokploy keys | AES-256-GCM, sealed with `MASTER_KEY` (or the generated key file). The API never returns them. |
+| Variable values and passwords read from Coolify | Sealed while a migration is in progress, erased when it applies. |
+| Sessions | Random 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie. Only its SHA-256 is stored. |
+| Migration records | Names, ids and step results. No secrets. |
 
-## Authentication
+## Guarantees
 
-- A single administrator uses an Argon2id password hash.
-- Mutations require `X-Requested-With: migrator`.
-- Cross-origin mutation requests require a matching `Origin` and `Host`.
-- Session and credential TTL hardening are implemented as part of later release work.
+- Coolify is only ever read.
+- Nothing is deployed. Rollback deletes only what Portage created.
+- Each account sees only its own connections and migrations.
+- Secrets are redacted from logs, progress events, error responses and exports.
+- Requests to cloud metadata addresses are always refused. Redirects from Coolify/Dokploy are never followed.
+- State-changing requests need a custom header and a matching `Origin`.
 
-## Upstream URLs
+## Limits you should know
 
-- HTTPS is required unless insecure HTTP is explicitly enabled.
-- Redirects are rejected.
-- Private addresses can be allowed for self-hosted deployments.
-- Cloud metadata addresses and userinfo URLs are always blocked.
-- Optional host allowlists override normal URL handling.
+- Whoever administers the host can access Portage while it runs. Run it on infrastructure you control, behind HTTPS.
+- By default the encryption key lives next to the data. Set `MASTER_KEY` to keep them apart.
+- Use temporary tokens: a Coolify token with the sensitive permission can read every secret on that Coolify.
+- There is no email, so there is no password reset link.
 
-## Container
+## Reporting a vulnerability
 
-Run with a read-only root filesystem, `/tmp` tmpfs, `/data` volume, dropped
-capabilities, and `no-new-privileges`. Never mount the Docker socket.
+Please open a private security advisory on the repository, or contact the author through the GitHub profile. Do not post secrets in public issues.

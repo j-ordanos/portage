@@ -1,15 +1,16 @@
-import {
-  AlertTriangle,
-  ArrowRight,
-  Database,
-  Layers,
-  Package,
-} from "lucide-react";
+import { AlertTriangle, Database, Layers, Package } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, errorText } from "./api";
-import { copy } from "./copy";
 import type { Inventory, PlanView, Step } from "./types";
-import { Alert, Dialog, ErrorBox, Spinner } from "./ui";
+import {
+  Alert,
+  Dialog,
+  ErrorState,
+  plain,
+  plural,
+  Skeleton,
+  Spinner,
+} from "./ui";
 
 const CREATES = [
   "CREATE_PROJECT",
@@ -40,6 +41,12 @@ export function groupSteps(steps: Step[]) {
   return groups;
 }
 
+/** Plain wording, and no "credentials are not migrated" note next to "Git access linked". */
+const tidy = (warnings: string[]) => {
+  const linked = warnings.some((w) => w.startsWith("Git access linked"));
+  return warnings.filter((w) => !(linked && /^R-020/.test(w))).map(plain);
+};
+
 const targetName = (label: string) =>
   label.replace(
     /^(Create|Use existing) (project|application|compose|\w+ database) /,
@@ -55,7 +62,7 @@ function Name({ from, to }: { from: string; to: string }) {
       <mark>{to.slice(from.length)}</mark>
     </>
   ) : (
-    <>{to}</>
+    to
   );
 }
 
@@ -76,7 +83,8 @@ export function Review({
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  const load = () => {
+    setError(null);
     Promise.all([
       api<PlanView>("GET", `/runs/${runId}/plan`),
       api<Inventory>("GET", `/runs/${runId}/inventory`),
@@ -86,7 +94,9 @@ export function Review({
         setInv(i);
       })
       .catch((e) => setError(errorText(e)));
-  }, [runId]);
+  };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load only depends on runId
+  useEffect(load, [runId]);
 
   const start = async () => {
     setBusy(true);
@@ -100,16 +110,40 @@ export function Review({
     }
   };
 
-  if (!plan || !inv)
+  if (error && !plan)
     return (
-      <main className="main">
-        {error ? (
-          <ErrorBox message={error.message} hint={error.hint} />
-        ) : (
-          <Spinner />
-        )}
-      </main>
+      <ErrorState message={error.message} hint={error.hint} onRetry={load} />
     );
+  if (!plan || !inv) {
+    return (
+      <div aria-busy="true" aria-label="Building the plan">
+        <div className="page-head">
+          <div
+            style={{
+              display: "grid",
+              gap: "0.6rem",
+              width: "min(26rem, 100%)",
+            }}
+          >
+            <Skeleton w="55%" h="2rem" />
+            <Skeleton w="90%" h="0.9rem" />
+          </div>
+        </div>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            style={{
+              padding: "0.75rem 0",
+              borderBottom: "1px solid var(--rule-soft)",
+            }}
+          >
+            <Skeleton w={`${55 + ((i * 13) % 35)}%`} h="1rem" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const sourceName = new Map<string, string>();
   for (const p of inv.projects) {
     sourceName.set(p.srcId, p.name);
@@ -127,27 +161,28 @@ export function Review({
     else blocks[blocks.length - 1]?.items.push(g);
   }
   const n = (kind: string) => groups.filter((g) => g.head.kind === kind).length;
+  const quiet =
+    /^Definition only|^Volume created empty|^Original domain kept|^Git access linked/;
   const attention = groups.filter((g) =>
-    g.warnings.some(
-      (w) =>
-        !/^Definition only|^Volume created empty|^Original domain kept|^Git access linked/.test(
-          w,
-        ),
-    ),
+    g.warnings.some((w) => !quiet.test(w)),
   ).length;
 
   return (
-    <main className="main">
-      <h1>{copy.review.title}</h1>
-      <p className="lede">
-        Here is what will exist in Dokploy. Coolify names are on the left, the
-        Dokploy names on the right.
-      </p>
+    <>
+      <div className="page-head">
+        <div>
+          <h1>Review the plan</h1>
+          <p>
+            This is exactly what will exist in Dokploy. Coolify names are on the
+            left, the Dokploy names on the right.
+          </p>
+        </div>
+      </div>
       <Alert tone="ok">
-        <strong>{copy.review.banner}</strong> Resources are created and
-        configured, and nothing is deployed.
+        <strong>Nothing has been changed in Dokploy yet.</strong> Resources are
+        created and configured, and nothing is deployed.
       </Alert>
-      <div className="facts">
+      <div className="tally">
         <span>
           <strong>{n("CREATE_PROJECT")}</strong> projects
         </span>
@@ -161,26 +196,30 @@ export function Review({
           <strong>{n("CREATE_DATABASE")}</strong> databases
         </span>
         {attention > 0 ? (
-          <span className="muted">{attention} with notes below</span>
+          <span className="muted">{attention} with notes</span>
         ) : null}
       </div>
+
+      {blocks.length === 0 ? (
+        <Alert tone="warn">
+          <strong>The plan is empty.</strong> Every selected resource was
+          skipped, for example because a project name already exists and you
+          chose to skip it. Go back and change your choices.
+        </Alert>
+      ) : null}
 
       {blocks.map(({ project, items }) => (
         <section key={project.head.seq} className="project-block">
           <div className="group-head">
-            <h3>
+            <h2>
               {sourceName.get(project.head.srcId) ?? "Project"}{" "}
-              <ArrowRight
-                size={14}
-                aria-hidden="true"
-                style={{ verticalAlign: "-2px" }}
-              />{" "}
+              <span className="faint">→</span>{" "}
               <Name
                 from={sourceName.get(project.head.srcId) ?? ""}
                 to={targetName(project.head.label)}
               />
-            </h3>
-            <span className="count">{items.length} resources</span>
+            </h2>
+            <span className="count">{plural(items.length, "resource")}</span>
           </div>
           {project.warnings.map((w) => (
             <p key={w} className="muted small" style={{ margin: "0.4rem 0 0" }}>
@@ -211,7 +250,7 @@ export function Review({
                 </span>
                 {g.warnings.length > 0 ? (
                   <ul className="notes detail">
-                    {g.warnings.map((w) => (
+                    {tidy(g.warnings).map((w) => (
                       <li key={w}>{w}</li>
                     ))}
                   </ul>
@@ -224,13 +263,8 @@ export function Review({
 
       {plan.notes.length > 0 ? (
         <section className="section">
-          <h2>
-            <AlertTriangle
-              size={16}
-              aria-hidden="true"
-              style={{ verticalAlign: "-2px" }}
-            />{" "}
-            {copy.review.manual}
+          <h2 className="row" style={{ gap: "0.5rem" }}>
+            <AlertTriangle size={18} aria-hidden="true" /> Needs manual work
           </h2>
           <ul className="notes">
             {plan.notes.map((x) => (
@@ -240,10 +274,13 @@ export function Review({
         </section>
       ) : null}
 
-      {error ? <ErrorBox message={error.message} hint={error.hint} /> : null}
-      <div className="actions">
+      {error ? <ErrorState message={error.message} hint={error.hint} /> : null}
+      <div
+        className="actions"
+        style={{ display: "flex", gap: "0.6rem", marginTop: "1.5rem" }}
+      >
         <button type="button" className="btn" onClick={onBack}>
-          {copy.review.back}
+          Back to choices
         </button>
         <button
           type="button"
@@ -251,33 +288,41 @@ export function Review({
           disabled={groups.length === 0}
           onClick={() => setConfirm(true)}
         >
-          {copy.review.create}
+          Create in Dokploy
         </button>
       </div>
+
       <Dialog
         open={confirm}
-        title={copy.review.confirmTitle}
         onClose={() => setConfirm(false)}
+        title="Create these resources in Dokploy?"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setConfirm(false)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={busy}
+              onClick={() => void start()}
+            >
+              {busy ? <Spinner label="Starting…" /> : "Create resources"}
+            </button>
+          </>
+        }
       >
-        <p>{copy.review.confirmBody}</p>
-        <div className="actions">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => setConfirm(false)}
-          >
-            {copy.review.cancel}
-          </button>
-          <button
-            type="button"
-            className="btn primary"
-            disabled={busy}
-            onClick={() => void start()}
-          >
-            {busy ? <Spinner label="Starting…" /> : copy.review.confirm}
-          </button>
-        </div>
+        <p>
+          Portage will create {n("CREATE_PROJECT")} projects with{" "}
+          {n("CREATE_APPLICATION") + n("CREATE_COMPOSE") + n("CREATE_DATABASE")}{" "}
+          resources. They are configured but <strong>not deployed</strong>, and
+          you can roll everything back afterwards.
+        </p>
       </Dialog>
-    </main>
+    </>
   );
 }

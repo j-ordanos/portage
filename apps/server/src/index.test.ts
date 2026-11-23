@@ -267,6 +267,30 @@ describe("accounts and access", () => {
     expect((await post({ "X-Requested-With": "migrator" })).status).toBe(400);
   });
 
+  it("accepts the declared PUBLIC_URL as an origin (front end on another host) and still rejects strangers", async () => {
+    const { app, cookie } = await setup({
+      PUBLIC_URL: "https://portage.vercel.app",
+    });
+    const post = (origin: string) =>
+      app.request("http://backend.internal/api/runs", {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          "Content-Type": "application/json",
+          "X-Requested-With": "migrator",
+          Origin: origin,
+          Host: "backend.internal",
+        },
+        body: "{}",
+      });
+    expect((await post("https://portage.vercel.app")).status).toBe(400); // allowed through, then fails validation
+    expect((await post("https://evil.example")).status).toBe(403);
+    expect((await post("https://portage.vercel.app.evil.example")).status).toBe(
+      403,
+    );
+    expect((await post("http://portage.vercel.app")).status).toBe(403); // wrong scheme is a different origin
+  });
+
   it("changes the password and signs out other sessions", async () => {
     const ctx = await setup();
     const other = await ctx.asUser("")("POST", "/api/auth/login", {

@@ -1,9 +1,8 @@
 import { CircleCheck, Download, ShieldAlert } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api, errorText } from "./api";
-import { copy } from "./copy";
 import type { RollbackPreview, RunView, VerifyCheck } from "./types";
-import { Alert, Dialog, ErrorBox, Spinner } from "./ui";
+import { Alert, Dialog, ErrorState, Spinner } from "./ui";
 
 /** The to-do items from the report's "Manual to-do" section, in order. */
 export function todoItems(markdown: string): string[] {
@@ -30,9 +29,13 @@ function inline(text: string): ReactNode[] {
 
 export function Finish({
   runId,
+  stopped = false,
+  onBack,
   onGone,
 }: {
   runId: string;
+  stopped?: boolean;
+  onBack?: () => void;
   onGone: () => void;
 }) {
   const [run, setRun] = useState<RunView | null>(null);
@@ -45,7 +48,6 @@ export function Finish({
   const [rollback, setRollback] = useState<RollbackPreview | null>(null);
   const [phrase, setPhrase] = useState("");
   const [busy, setBusy] = useState(false);
-  const [newKey, setNewKey] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -86,15 +88,6 @@ export function Finish({
       done: value,
     }).catch(() => undefined);
   };
-  const reenter = async () => {
-    try {
-      await api("PUT", `/runs/${runId}/credentials`, { dokployApiKey: newKey });
-      setNewKey(""); // the key now lives only on the server
-      await load();
-    } catch (e) {
-      setError(errorText(e));
-    }
-  };
   const openRollback = async () => {
     setError(null);
     try {
@@ -123,62 +116,51 @@ export function Finish({
 
   if (!run)
     return (
-      <main className="main">
+      <>
         {error ? (
-          <ErrorBox message={error.message} hint={error.hint} />
+          <ErrorState message={error.message} hint={error.hint} />
         ) : (
           <Spinner />
         )}
-      </main>
+      </>
     );
   const failed = checks?.filter((c) => c.status === "fail") ?? [];
   const rolledBack = run.status === "rolled_back";
   const todo = report ? todoItems(report) : [];
 
   return (
-    <main className="main">
-      <h1>{rolledBack ? "Rolled back" : "Everything is in Dokploy"}</h1>
+    <>
+      <h1>
+        {rolledBack
+          ? "Rolled back"
+          : stopped
+            ? "Migration stopped"
+            : "Everything is in Dokploy"}
+      </h1>
       <p className="lede">
         {rolledBack
           ? "Everything this tool created in Dokploy was deleted. Coolify was never touched."
-          : copy.finish.deployed}
+          : stopped
+            ? "Some resources may already exist in Dokploy. Roll back to remove them, or go back to the progress screen to continue."
+            : "Nothing was deployed. Review the resources in Dokploy, then deploy them yourself."}
       </p>
 
-      {!rolledBack ? (
+      {!rolledBack && !stopped ? (
         <>
           <section className="section" style={{ marginTop: 0 }}>
             <h2>Read back from Dokploy</h2>
             {!run.credentialsActive ? (
               <Alert tone="warn">
-                The saved keys for this run expired. Enter the Dokploy API key
-                again to verify or roll back.
-                <div className="row" style={{ marginTop: "0.5rem" }}>
-                  <input
-                    className="select"
-                    style={{ minWidth: "16rem" }}
-                    type="password"
-                    autoComplete="off"
-                    spellCheck={false}
-                    aria-label="Dokploy API key"
-                    value={newKey}
-                    onChange={(e) => setNewKey(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="btn small"
-                    disabled={!newKey}
-                    onClick={() => void reenter()}
-                  >
-                    Save key
-                  </button>
-                </div>
+                A saved connection used by this migration was deleted, so
+                Portage can no longer read Dokploy to verify it. Add the
+                connection again in <a href="#/settings">Settings</a>.
               </Alert>
             ) : checks === null ? (
-              <Spinner label={copy.finish.verifying} />
+              <Spinner label={"Checking everything in Dokploy…"} />
             ) : failed.length === 0 ? (
               <p className="verdict">
                 <CircleCheck size={20} aria-hidden="true" />
-                {copy.finish.verified} {checks.length} checks: sources, build
+                {"Every check passed."} {checks.length} checks: sources, build
                 types, environment keys, domains, mounts, databases.
               </p>
             ) : (
@@ -232,21 +214,20 @@ export function Finish({
           {report ? (
             <section className="section">
               <div className="row">
-                <h2 className="grow">{copy.finish.report}</h2>
+                <h2 className="grow">{"Migration report"}</h2>
                 <a
                   className="btn small"
                   href={`/api/runs/${runId}/report.md`}
                   download="migration-report.md"
                 >
-                  <Download size={14} aria-hidden="true" />{" "}
-                  {copy.finish.download}
+                  <Download size={14} aria-hidden="true" /> {"Download report"}
                 </a>
                 <a
                   className="btn small"
                   href={`/api/runs/${runId}/manifest.json`}
                   download="manifest.json"
                 >
-                  {copy.finish.manifest}
+                  {"Download manifest"}
                 </a>
               </div>
               <pre className="report">{report}</pre>
@@ -257,37 +238,50 @@ export function Finish({
 
       <div className="alert warn" style={{ marginTop: "1.6rem" }}>
         <ShieldAlert size={18} aria-hidden="true" />
-        <div>{copy.finish.revoke}</div>
+        <div>
+          {
+            "Revoke the temporary Coolify token and the Dokploy API key you used for this migration."
+          }
+        </div>
       </div>
-      {error ? <ErrorBox message={error.message} hint={error.hint} /> : null}
+      {error ? <ErrorState message={error.message} hint={error.hint} /> : null}
 
       <section className="danger-zone">
         {!rolledBack ? (
           <>
-            <h2>{copy.finish.rollbackTitle}</h2>
-            <p>{copy.finish.rollbackBody}</p>
+            <h2>{"Undo this migration"}</h2>
+            <p>
+              {
+                "Deletes only what this tool created in Dokploy. Existing resources are never touched."
+              }
+            </p>
             <button
               type="button"
               className="btn danger"
               onClick={() => void openRollback()}
             >
-              {copy.finish.rollbackAction}
+              {"Delete created resources"}
             </button>
           </>
         ) : null}
         <div className="actions">
+          {stopped && onBack ? (
+            <button type="button" className="btn" onClick={onBack}>
+              Back to progress
+            </button>
+          ) : null}
           <button type="button" className="btn" onClick={() => void purge()}>
-            {copy.finish.purge}
+            {"Delete this run's data"}
           </button>
           <button type="button" className="btn primary" onClick={onGone}>
-            {copy.finish.again}
+            {"Start another migration"}
           </button>
         </div>
       </section>
 
       <Dialog
         open={rollback !== null}
-        title={copy.finish.rollbackTitle}
+        title="Undo this migration"
         onClose={() => setRollback(null)}
       >
         {rollback ? (
@@ -303,7 +297,7 @@ export function Finish({
               ))}
             </ul>
             <label className="field">
-              {copy.finish.rollbackPhrase}:{" "}
+              {"Type this phrase to confirm"}:{" "}
               <code>{rollback.confirmPhrase}</code>
               <input
                 value={phrase}
@@ -318,7 +312,7 @@ export function Finish({
                 className="btn"
                 onClick={() => setRollback(null)}
               >
-                {copy.review.cancel}
+                {"Cancel"}
               </button>
               <button
                 type="button"
@@ -329,13 +323,13 @@ export function Finish({
                 {busy ? (
                   <Spinner label="Deleting…" />
                 ) : (
-                  copy.finish.rollbackAction
+                  "Delete created resources"
                 )}
               </button>
             </div>
           </>
         ) : null}
       </Dialog>
-    </main>
+    </>
   );
 }

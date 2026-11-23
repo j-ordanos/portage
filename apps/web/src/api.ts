@@ -31,6 +31,9 @@ export async function api<T>(
   } catch {
     // plain-text responses (markdown report)
   }
+  if (response.status === 401 && !path.startsWith("/auth/")) {
+    window.dispatchEvent(new Event("portage:session-expired"));
+  }
   if (!response.ok) {
     const payload = (data ?? {}) as {
       message?: string;
