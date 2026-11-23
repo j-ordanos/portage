@@ -67,7 +67,11 @@ export const Source = z.discriminatedUnion("type", [
       ]),
       commit: z.string().optional(),
       url: z.string().optional(),
-      sshKeyRef: z.string().optional(),
+      /** Coolify deploy key (name + fingerprint only) and GitHub App, used to match Dokploy providers. */
+      keyName: z.string().optional(),
+      keyFingerprint: z.string().optional(),
+      appName: z.string().optional(),
+      appOrg: z.string().optional(),
     })
     .passthrough(),
   z

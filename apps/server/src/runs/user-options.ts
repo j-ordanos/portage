@@ -17,8 +17,16 @@ export const UserOptions = z.object({
     .default("keep-original"),
   tempBase: z.string().min(1).optional(),
   domainMap: z.record(z.string()).default({}),
-  githubProviderId: z.string().min(1).optional(),
-  sshKeyId: z.string().min(1).optional(),
+  /** Per-resource Git access chosen in the picker; absent = automatic. */
+  gitOverrides: z
+    .record(
+      z.object({
+        githubId: z.string().min(1).optional(),
+        sshKeyId: z.string().min(1).optional(),
+        url: z.boolean().optional(),
+      }),
+    )
+    .default({}),
 });
 export type UserOptions = z.infer<typeof UserOptions>;
 
@@ -57,9 +65,6 @@ export function toCoreOptions(ir: IR, user: UserOptions): Options {
   options.target.collisionMarker = user.collisionMarker;
   options.target.envStrategy = user.envStrategy;
   if (user.serverId) options.target.serverId = user.serverId;
-  if (user.githubProviderId)
-    options.target.githubProviderId = user.githubProviderId;
-  if (user.sshKeyId) options.target.sshKeyId = user.sshKeyId;
   options.secrets.defaultMode = user.secretsMode;
   options.domains.policy = user.domainPolicy;
   if (user.tempBase) options.domains.tempBase = user.tempBase;

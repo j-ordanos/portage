@@ -98,6 +98,20 @@ export interface DokployClient {
     engine: DatabaseEngine,
     databaseId: string,
   ): Promise<Record<string, unknown>>;
+  /** Configured Git providers (GitHub Apps etc.) of the organisation. */
+  gitProviders(): Promise<
+    Array<{
+      gitProviderId: string;
+      name: string;
+      githubId?: string;
+      githubAppName?: string;
+    }>
+  >;
+  /** `owner/repo` (lowercase) the GitHub provider can access. */
+  githubRepositories(githubId: string): Promise<string[]>;
+  sshKeys(): Promise<
+    Array<{ sshKeyId: string; name: string; publicKey?: string }>
+  >;
 
   projectCreate(input: { name: string; description?: string }): Promise<{
     projectId: string;
@@ -308,6 +322,70 @@ export function createDokployClient(
       );
     },
 
+    async gitProviders() {
+      const raw = await read("/api/gitProvider.getAll");
+      const parsed = pick(
+        z.array(
+          z
+            .object({
+              gitProviderId: z.string(),
+              name: z.string(),
+              github: z
+                .object({
+                  githubId: z.string(),
+                  githubAppName: z.string().nullable().optional(),
+                  isConfigured: z.boolean().optional(),
+                })
+                .passthrough()
+                .nullable()
+                .optional(),
+            })
+            .passthrough(),
+        ),
+        raw,
+        "gitProvider.getAll",
+      );
+      return parsed
+        .filter((p) => !p.github || p.github.isConfigured !== false)
+        .map((p) => ({
+          gitProviderId: p.gitProviderId,
+          name: p.name,
+          ...(p.github ? { githubId: p.github.githubId } : {}),
+          ...(p.github?.githubAppName
+            ? { githubAppName: p.github.githubAppName }
+            : {}),
+        }));
+    },
+    async githubRepositories(githubId) {
+      const raw = await read("/api/github.getGithubRepositories", { githubId });
+      const parsed = pick(
+        z.array(z.object({ full_name: z.string() }).passthrough()),
+        raw,
+        "github.getGithubRepositories",
+      );
+      return parsed.map((r) => r.full_name.toLowerCase());
+    },
+    async sshKeys() {
+      const raw = await read("/api/sshKey.all");
+      const parsed = pick(
+        z.array(
+          z
+            .object({
+              sshKeyId: z.string(),
+              name: z.string(),
+              publicKey: z.string().nullable().optional(),
+            })
+            .passthrough(),
+        ),
+        raw,
+        "sshKey.all",
+      );
+      return parsed.map((k) => ({
+        sshKeyId: k.sshKeyId,
+        name: k.name,
+        ...(k.publicKey ? { publicKey: k.publicKey } : {}),
+      }));
+    },
     async databaseOne(engine, databaseId) {
       return object(
         await read(`/api/${engine}.one`, { [`${engine}Id`]: databaseId }),

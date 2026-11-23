@@ -3,9 +3,13 @@ import {
   buildPlan,
   buildRollbackPlan,
   type CoolifyReader,
+  candidatesFor,
   type DokployClient,
   executeRollbackStep,
   extractInventory,
+  type GitCandidates,
+  type GitLink,
+  type GitSnapshot,
   IR,
   type Plan,
   type RollbackEntry,
@@ -13,7 +17,9 @@ import {
   renderManifest,
   renderMigrationReport,
   requireRollbackConfirmation,
+  resolveGitLink,
   runRules,
+  sshFingerprint,
   type TargetSnapshot,
   validatePlan,
   validateUpstreamUrl,
@@ -268,6 +274,102 @@ export class RunService {
     };
   }
 
+  /** What Dokploy can link to: GitHub Apps (with the repos each can reach) and SSH keys. Failures degrade to "unknown". */
+  private async gitSnapshot(client: DokployClient): Promise<GitSnapshot> {
+    const [providers, keys] = await Promise.all([
+      client.gitProviders().catch(() => []),
+      client.sshKeys().catch(() => []),
+    ]);
+    const github = await Promise.all(
+      providers
+        .flatMap((p) =>
+          p.githubId ? [{ githubId: p.githubId, name: p.name }] : [],
+        )
+        .map(async (p) => ({
+          githubId: p.githubId,
+          label: p.name,
+          repos: await client
+            .githubRepositories(p.githubId)
+            .then((r) => new Set(r))
+            .catch(() => null),
+        })),
+    );
+    return {
+      github,
+      ssh: keys.map((k) => {
+        const fingerprint = k.publicKey
+          ? sshFingerprint(k.publicKey)
+          : undefined;
+        return {
+          sshKeyId: k.sshKeyId,
+          name: k.name,
+          ...(fingerprint ? { fingerprint } : {}),
+        };
+      }),
+    };
+  }
+
+  /** Resources whose repository needs credentials in Dokploy. */
+  private privateRepos(ir: IR) {
+    return allResources(ir).flatMap(({ project, environment, resource }) =>
+      (resource.kind === "application" || resource.kind === "compose") &&
+      resource.source?.type === "git" &&
+      resource.source.provider !== "public"
+        ? [{ project, environment, resource, source: resource.source }]
+        : [],
+    );
+  }
+
+  /** Data for the Git access picker: what was resolved automatically and every alternative. */
+  async gitView(runId: string) {
+    const ir = this.ir(runId);
+    const user = this.userOptions(runId);
+    const snapshot = await this.gitSnapshot(
+      this.deps.dokploy(this.credentials(runId).dokploy),
+    );
+    const included = new Set(
+      user.include ?? allResources(ir).map((r) => r.resource.srcId),
+    );
+    return {
+      github: snapshot.github.map((g) => ({
+        githubId: g.githubId,
+        label: g.label,
+        reposKnown: g.repos !== null,
+      })),
+      ssh: snapshot.ssh.map((k) => ({ sshKeyId: k.sshKeyId, label: k.name })),
+      resources: this.privateRepos(ir)
+        .filter((r) => included.has(r.resource.srcId))
+        .map(({ project, resource, source }) => {
+          const info = {
+            provider: source.provider,
+            repo: source.repo,
+            url: source.url,
+            keyName: source.keyName,
+            keyFingerprint: source.keyFingerprint,
+          };
+          const override = user.gitOverrides[resource.srcId];
+          const resolved: GitLink = resolveGitLink(info, snapshot, override);
+          const candidates: GitCandidates = candidatesFor(info, snapshot);
+          return {
+            srcId: resource.srcId,
+            name: resource.name,
+            project: project.name,
+            repo: source.repo,
+            branch: source.branch,
+            provider: source.provider,
+            coolify: {
+              appName: source.appName,
+              appOrg: source.appOrg,
+              keyName: source.keyName,
+            },
+            resolved,
+            candidates,
+            overridden: override !== undefined,
+          };
+        }),
+    };
+  }
+
   /** Dry run: read Dokploy, build the plan, store it. Makes no writes. */
   async plan(runId: string): Promise<{ plan: Plan; problems: string[] }> {
     const run = this.getRun(runId);
@@ -307,7 +409,25 @@ export class RunService {
         })),
       })),
     };
-    const plan = buildPlan(ir, toCoreOptions(ir, user), snapshot);
+    const gitSnapshot = await this.gitSnapshot(client);
+    const gitLinks: Record<string, GitLink> = {};
+    for (const { resource, source } of this.privateRepos(ir)) {
+      gitLinks[resource.srcId] = resolveGitLink(
+        {
+          provider: source.provider,
+          repo: source.repo,
+          url: source.url,
+          keyName: source.keyName,
+          keyFingerprint: source.keyFingerprint,
+        },
+        gitSnapshot,
+        user.gitOverrides[resource.srcId],
+      );
+    }
+    const plan = buildPlan(ir, toCoreOptions(ir, user), {
+      ...snapshot,
+      gitLinks,
+    });
     const problems = validatePlan(plan);
     if (problems.length > 0)
       throw http(`Plan is invalid: ${problems.join("; ")}`, 500, "INTERNAL");

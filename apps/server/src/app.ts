@@ -322,6 +322,9 @@ export function createApp(options: AppOptions) {
   app.get("/api/runs/:id/target", async (c) =>
     c.json(await service.target(c.req.param("id"))),
   );
+  app.get("/api/runs/:id/git", async (c) =>
+    c.json(await service.gitView(c.req.param("id"))),
+  );
   app.post("/api/runs/:id/plan", async (c) => {
     await service.plan(c.req.param("id"));
     return c.json(service.planView(c.req.param("id")));

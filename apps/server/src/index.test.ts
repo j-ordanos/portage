@@ -22,7 +22,13 @@ type Json = Record<string, any>;
 let dir: string;
 let fake: ReturnType<typeof createFakeDokploy>;
 
-async function setup(overrides: Partial<Config> = {}) {
+async function setup(
+  overrides: Partial<Config> = {},
+  extra: {
+    privateRepos?: boolean;
+    seed?: Parameters<typeof createFakeDokploy>[0];
+  } = {},
+) {
   const config: Config = {
     MASTER_KEY: randomBytes(32).toString("base64"),
     ADMIN_PASSWORD_HASH: await argon2.hash("dev-password", {
@@ -37,11 +43,15 @@ async function setup(overrides: Partial<Config> = {}) {
   };
   fake = createFakeDokploy({
     projects: [{ name: "acme", environments: ["production"] }],
+    ...extra.seed,
   });
   const app = createApp({
     config,
     clients: {
-      coolify: () => createFakeCoolify(CANARY),
+      coolify: () =>
+        createFakeCoolify(CANARY, {
+          privateRepos: extra.privateRepos === true,
+        }),
       dokploy: () => fake.client,
     },
     sleep: async () => undefined,
@@ -352,6 +362,104 @@ describe("full migration through the API", () => {
       ).status,
     ).toBe(200);
     expect((await call("POST", `/api/runs/${id}/plan`)).status).toBe(200);
+  });
+});
+
+describe("git access picker", () => {
+  const seed = {
+    githubProviders: [
+      {
+        githubId: "gh-dokploy",
+        name: "Dokploy-App",
+        repos: ["acme/private-api", "acme/keyed"],
+      },
+      { githubId: "gh-other", name: "Other", repos: ["nobody/else"] },
+    ],
+    sshKeys: [{ sshKeyId: "key-9", name: "some-key" }],
+  };
+
+  it("resolves private repos automatically and lets the user override one", async () => {
+    const ctx = await setup({}, { privateRepos: true, seed });
+    const { call } = ctx;
+    const id = (await call("POST", "/api/runs", connectBody)).body
+      .runId as string;
+    await call("POST", `/api/runs/${id}/discover`);
+
+    const git = (await call("GET", `/api/runs/${id}/git`)).body;
+    expect(git.github.map((g: { label: string }) => g.label)).toEqual([
+      "Dokploy-App",
+      "Other",
+    ]);
+    const byName = Object.fromEntries(
+      git.resources.map((r: { name: string }) => [r.name, r]),
+    );
+    // names differ between the two tools; access decides
+    expect(byName.api.resolved).toMatchObject({
+      kind: "github",
+      githubId: "gh-dokploy",
+    });
+    expect(byName.api.coolify).toMatchObject({
+      appName: "Acme Coolify App",
+      appOrg: "acme",
+    });
+    expect(
+      byName.api.candidates.github.map(
+        (c: { hasAccess: boolean }) => c.hasAccess,
+      ),
+    ).toEqual([true, false]);
+    expect(byName.worker.coolify.keyName).toBe("keyed-deploy");
+    expect(byName.worker.resolved).toMatchObject({
+      kind: "github",
+      githubId: "gh-dokploy",
+    }); // no matching key: the app that can reach it
+    expect(git.resources.some((r: { name: string }) => r.name === "web")).toBe(
+      false,
+    ); // public repos need no picker
+
+    // user picks the SSH key for the worker
+    const chosen = await call("PUT", `/api/runs/${id}/options`, {
+      gitOverrides: { "app-key": { sshKeyId: "key-9" } },
+    });
+    expect(chosen.status).toBe(200);
+    const after = (
+      await call("GET", `/api/runs/${id}/git`)
+    ).body.resources.find((r: { name: string }) => r.name === "worker");
+    expect(after).toMatchObject({
+      overridden: true,
+      resolved: { kind: "ssh", sshKeyId: "key-9" },
+    });
+
+    const planned = (await call("POST", `/api/runs/${id}/plan`)).body
+      .steps as Array<{ label: string; warnings: string[] }>;
+    expect(
+      planned.find((s) => s.label.includes("source for api"))?.warnings[0],
+    ).toContain("Git access linked");
+    await call("POST", `/api/runs/${id}/apply`);
+    await ctx.app.manager.idle(id);
+    const rows = fake.snapshot().resources as Array<Record<string, unknown>>;
+    expect(rows.find((r) => r.name === "api")).toMatchObject({
+      sourceType: "github",
+      githubId: "gh-dokploy",
+      owner: "Acme",
+      repository: "Private-Api",
+    });
+    expect(rows.find((r) => r.name === "worker")).toMatchObject({
+      sourceType: "git",
+      customGitSSHKeyId: "key-9",
+      customGitBranch: "dev",
+    });
+  });
+
+  it("still plans when Dokploy has no providers or keys, flagging a manual relink", async () => {
+    const ctx = await setup({}, { privateRepos: true });
+    const id = (await ctx.call("POST", "/api/runs", connectBody)).body
+      .runId as string;
+    await ctx.call("POST", `/api/runs/${id}/discover`);
+    const plan = (await ctx.call("POST", `/api/runs/${id}/plan`)).body
+      .steps as Array<{ label: string; warnings: string[] }>;
+    expect(
+      plan.find((s) => s.label.includes("source for api"))?.warnings[0],
+    ).toContain("Relink Git access");
   });
 });
 

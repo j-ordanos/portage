@@ -160,6 +160,7 @@ function fakeReader(): CoolifyReader {
     listGithubApps: async () => [
       { id: 0, name: "Public GitHub", is_public: true },
     ],
+    listSecurityKeys: async () => [],
     getProject: async () => ({
       uuid: "p1",
       name: "Acme",
@@ -372,6 +373,7 @@ describe.skipIf(!existsSync(join(labDir, "projects.json")))(
       listServices: async () => read("services") as unknown[],
       listServers: async () => read("servers") as unknown[],
       listGithubApps: async () => read("github-apps") as unknown[],
+      listSecurityKeys: async () => read("security_keys") as unknown[],
       getProject: async (u) => read(`project_${u}`),
       getEnvironment: async (u, e) => read(`project_${u}_env_${e}`),
       getApplication: async (u) => read(`applications_${u}`),

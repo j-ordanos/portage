@@ -392,34 +392,73 @@ function imageRef(image: string, tag: string): string {
     : `${image}:${tag}`;
 }
 
+/** owner/repo with the original capitalisation (GitHub is case-insensitive, but keep what the user wrote). */
+function ownerRepo(
+  source: Rec,
+): { owner: string; repository: string } | undefined {
+  const raw = (str(source.url) ?? str(source.repo) ?? "")
+    .trim()
+    .replace(/\.git$/i, "");
+  const m =
+    /^[\w.-]+@[\w.-]+:([\w.-]+)\/([\w.-]+)$/.exec(raw) ??
+    /^(?:https?|ssh|git):\/\/(?:[^/@]+@)?[^/]+\/([\w.-]+)\/([\w.-]+)$/i.exec(
+      raw,
+    ) ??
+    /^([\w.-]+)\/([\w.-]+)$/.exec(raw);
+  return m ? { owner: m[1] as string, repository: m[2] as string } : undefined;
+}
+
+/**
+ * How a private repo is reached was decided at plan time (`payload.link`): a Dokploy GitHub App that can access
+ * it, an SSH key (same key / same name), or by URL with a relink warning.
+ */
 async function configureSource(
   step: Step,
   p: Rec,
   ctx: ApplyContext,
 ): Promise<StepResult> {
   const source = rec(p.source);
+  const link = rec(p.link);
   const resource = await ownResource(ctx, step.srcId);
   const warnings: string[] = [];
+  const provider = str(source.provider);
+  const branch = str(source.branch) ?? "main";
+  const url = str(source.url) ?? str(source.repo) ?? "";
+  const slug = ownerRepo(source);
+  const viaGithub =
+    link.kind === "github" &&
+    typeof link.githubId === "string" &&
+    slug !== undefined;
+  const viaSsh = link.kind === "ssh" && typeof link.sshKeyId === "string";
+  if (!viaGithub && !viaSsh && provider && provider !== "public") {
+    warnings.push(
+      "Private repository: relink the Git provider/SSH key in Dokploy",
+    );
+  }
 
   if (p.target === "compose") {
     if (source.type !== "git") return { note: "No git source to configure" };
-    const url = str(source.url) ?? str(source.repo) ?? "";
-    const provider = str(source.provider);
-    if (provider !== "public")
-      warnings.push(
-        "Private repository: relink the Git provider/SSH key in Dokploy",
-      );
-    await ctx.dokploy.composeUpdate({
-      composeId: resource.targetId,
-      sourceType: "git",
-      customGitUrl: url,
-      customGitBranch: str(source.branch) ?? "main",
-      customGitSSHKeyId:
-        provider === "deploy-key"
-          ? (ctx.options.target.sshKeyId ?? null)
-          : null,
-      composePath: `./${stripLeadingSlash(str(p.composePath) ?? "docker-compose.yml")}`,
-    });
+    const composePath = `./${stripLeadingSlash(str(p.composePath) ?? "docker-compose.yml")}`;
+    if (viaGithub && slug) {
+      await ctx.dokploy.composeUpdate({
+        composeId: resource.targetId,
+        sourceType: "github",
+        githubId: link.githubId as string,
+        owner: slug.owner,
+        repository: slug.repository,
+        branch,
+        composePath,
+      });
+    } else {
+      await ctx.dokploy.composeUpdate({
+        composeId: resource.targetId,
+        sourceType: "git",
+        customGitUrl: url,
+        customGitBranch: branch,
+        customGitSSHKeyId: viaSsh ? (link.sshKeyId as string) : null,
+        composePath,
+      });
+    }
     return {
       targetId: resource.targetId,
       created: false,
@@ -438,35 +477,24 @@ async function configureSource(
     });
     return { targetId: applicationId, created: false };
   }
-  const provider = str(source.provider);
-  const repo = str(source.repo) ?? "";
-  const url = str(source.url) ?? repo;
   const buildPath = str(p.baseDir) ?? "/";
-  const githubId = ctx.options.target.githubProviderId;
-  const ownerRepo = /^([\w.-]+)\/([\w.-]+)$/.exec(repo);
-  if (provider === "github-app" && githubId && ownerRepo) {
+  if (viaGithub && slug) {
     await ctx.dokploy.applicationSaveGithubProvider({
       applicationId,
-      githubId,
-      owner: ownerRepo[1] as string,
-      repository: ownerRepo[2] as string,
-      branch: str(source.branch) ?? "main",
+      githubId: link.githubId as string,
+      owner: slug.owner,
+      repository: slug.repository,
+      branch,
       buildPath,
     });
     return { targetId: applicationId, created: false };
   }
-  if (provider && provider !== "public") {
-    warnings.push(
-      "Private repository: relink the Git provider/SSH key in Dokploy",
-    );
-  }
   await ctx.dokploy.applicationSaveGitProvider({
     applicationId,
     customGitUrl: url,
-    customGitBranch: str(source.branch) ?? "main",
+    customGitBranch: branch,
     customGitBuildPath: buildPath,
-    customGitSSHKeyId:
-      provider === "deploy-key" ? (ctx.options.target.sshKeyId ?? null) : null,
+    customGitSSHKeyId: viaSsh ? (link.sshKeyId as string) : null,
   });
   return {
     targetId: applicationId,

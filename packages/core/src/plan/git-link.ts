@@ -35,10 +35,10 @@ export interface GitCandidates {
 }
 
 export interface GitOverride {
-  githubId?: string;
-  sshKeyId?: string;
+  githubId?: string | undefined;
+  sshKeyId?: string | undefined;
   /** Link by plain URL and relink by hand later. */
-  url?: boolean;
+  url?: boolean | undefined;
 }
 
 /** `owner/repo` (lowercase) for github.com style references: `owner/repo`, https URLs and scp-style ssh URLs. */

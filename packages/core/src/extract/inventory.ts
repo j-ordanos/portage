@@ -163,6 +163,7 @@ export async function extractInventory(
     projectsRaw,
     serversRaw,
     githubAppsRaw,
+    keysRaw,
     appsList,
     dbsList,
     servicesList,
@@ -170,6 +171,7 @@ export async function extractInventory(
     guard("projects", [] as unknown[], () => reader.listProjects()),
     guard("servers", [] as unknown[], () => reader.listServers()),
     guard("GitHub apps", [] as unknown[], () => reader.listGithubApps()),
+    guard("deploy keys", [] as unknown[], () => reader.listSecurityKeys()),
     guard("applications", [] as unknown[], () => reader.listApplications()),
     guard("databases", [] as unknown[], () => reader.listDatabases()),
     guard("services", [] as unknown[], () => reader.listServices()),
@@ -182,8 +184,26 @@ export async function extractInventory(
       githubApps.set(id, {
         name: str(raw, "name") ?? "GitHub",
         isPublic: rec(raw).is_public === true,
+        ...(str(raw, "organization")
+          ? { org: str(raw, "organization") as string }
+          : {}),
       });
     }
+  }
+
+  // Deploy keys: only name + fingerprint are kept (never the private key).
+  const keys = new Map<string, { name: string; fingerprint?: string }>();
+  for (const raw of keysRaw) {
+    const info = {
+      name: str(raw, "name") ?? "key",
+      ...(str(raw, "fingerprint")
+        ? { fingerprint: str(raw, "fingerprint") as string }
+        : {}),
+    };
+    const id = num(raw, "id");
+    if (id !== undefined) keys.set(String(id), info);
+    const uuid = str(raw, "uuid");
+    if (uuid) keys.set(uuid, info);
   }
 
   // Fallback index for resources the environment call does not list (matched by numeric environment_id).
@@ -263,6 +283,7 @@ export async function extractInventory(
               ...ctx,
               vault,
               githubApps,
+              keys,
             });
           } else if (ref.kind === "database") {
             const [dbDetail, envs, storages, backups] = await Promise.all([

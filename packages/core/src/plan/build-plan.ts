@@ -13,6 +13,7 @@ import {
   parseDomain,
   validDomainHost,
 } from "../transform/domains.js";
+import type { GitLink } from "./git-link.js";
 import {
   type Options,
   type Plan,
@@ -37,6 +38,8 @@ export interface TargetSnapshot {
   /** Existing domain hosts (lowercase) for conflict warnings. */
   domains?: string[];
   serverIds?: string[];
+  /** How each private repo is reached in Dokploy, by resource srcId (see resolveGitLink). */
+  gitLinks?: Record<string, GitLink>;
 }
 
 /** Marker written to every resource we create; lets crash recovery prove a resource is ours. */
@@ -244,6 +247,20 @@ function domainSteps(
   });
 }
 
+/** What the person should know about how a private repo gets its Git access. */
+function linkWarnings(
+  ctx: Ctx,
+  srcId: string,
+  provider: string | undefined,
+): string[] {
+  if (!provider || provider === "public") return [];
+  const link = ctx.snapshot.gitLinks?.[srcId];
+  if (link && link.kind !== "url") return [`Git access linked: ${link.reason}`];
+  return [
+    `Relink Git access in Dokploy before deploying: ${link?.reason ?? "private repository"}`,
+  ];
+}
+
 function planApplication(
   ctx: Ctx,
   resource: IRApplication,
@@ -279,14 +296,12 @@ function planApplication(
       target: "application",
       source: resource.source,
       baseDir: resource.build.baseDir,
+      ...(ctx.snapshot.gitLinks?.[resource.srcId]
+        ? { link: ctx.snapshot.gitLinks[resource.srcId] }
+        : {}),
     },
     vaultRefs: [],
-    warnings:
-      gitProvider && gitProvider !== "public"
-        ? [
-            "Private repository: relink the Git provider/SSH key in Dokploy before deploying",
-          ]
-        : [],
+    warnings: linkWarnings(ctx, resource.srcId, gitProvider),
   });
   const build = add(ctx, {
     kind: "CONFIGURE_BUILD",
@@ -407,14 +422,12 @@ function planCompose(
         target: "compose",
         source: resource.source,
         composePath: resource.composePath,
+        ...(ctx.snapshot.gitLinks?.[resource.srcId]
+          ? { link: ctx.snapshot.gitLinks[resource.srcId] }
+          : {}),
       },
       vaultRefs: [],
-      warnings:
-        git.provider !== "public"
-          ? [
-              "Private repository: relink the Git provider/SSH key in Dokploy before deploying",
-            ]
-          : [],
+      warnings: linkWarnings(ctx, resource.srcId, git.provider),
     });
   }
   if (resource.env.length > 0) {

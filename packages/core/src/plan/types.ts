@@ -58,10 +58,6 @@ export const Options = z
       collisionPolicy: z.enum(["adopt", "suffix", "skip"]),
       suffix: z.string().optional(),
       collisionMarker: z.string().min(1).max(8).default("*"),
-      /** Dokploy GitHub provider id used for private GitHub App repos; otherwise they are linked by URL and flagged. */
-      githubProviderId: z.string().optional(),
-      /** Dokploy SSH key id used for deploy-key repos. */
-      sshKeyId: z.string().optional(),
     }),
     secrets: z.object({
       defaultMode: z.enum(["names-only", "import-values", "prompt"]),

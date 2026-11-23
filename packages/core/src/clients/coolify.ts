@@ -39,6 +39,8 @@ export interface CoolifyReader {
   getServiceEnvs(uuid: string): Promise<unknown[]>;
   getServiceStorages(uuid: string): Promise<unknown[]>;
   listGithubApps(): Promise<unknown[]>;
+  /** Deploy keys: name + fingerprint are used for matching; the private key is never read into the IR. */
+  listSecurityKeys(): Promise<unknown[]>;
 }
 
 export function createCoolifyReader(
@@ -145,5 +147,6 @@ export function createCoolifyReader(
     getServiceStorages: (uuid) =>
       storages(`/api/v1/services/${encodeURIComponent(uuid)}/storages`),
     listGithubApps: () => list("/api/v1/github-apps"),
+    listSecurityKeys: () => list("/api/v1/security/keys"),
   };
 }

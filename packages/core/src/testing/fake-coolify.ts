@@ -27,6 +27,7 @@ export interface FakeCoolifyCanaries {
  */
 export function createFakeCoolify(
   canaries: FakeCoolifyCanaries,
+  options: { privateRepos?: boolean } = {},
 ): CoolifyReader {
   const gitApp: Rec = {
     uuid: "app-git",
@@ -66,7 +67,36 @@ export function createFakeCoolify(
     postgres_password: canaries.dbPassword,
     is_public: false,
   };
+  // Optional private repositories: one through a (private) Coolify GitHub App, one through a deploy key.
+  const privateApps: Rec[] = options.privateRepos
+    ? [
+        {
+          uuid: "app-priv",
+          name: "api",
+          environment_id: 1,
+          build_pack: "nixpacks",
+          git_repository: "Acme/Private-Api",
+          git_branch: "main",
+          source_type: "App\\Models\\GithubApp",
+          source_id: 5,
+          ports_exposes: "3000",
+          base_directory: "/",
+        },
+        {
+          uuid: "app-key",
+          name: "worker",
+          environment_id: 1,
+          build_pack: "nixpacks",
+          git_repository: "git@github.com:acme/keyed.git",
+          git_branch: "dev",
+          private_key_id: 7,
+          ports_exposes: "3000",
+          base_directory: "/",
+        },
+      ]
+    : [];
   const byUuid: Record<string, Rec> = {
+    ...Object.fromEntries(privateApps.map((a) => [a.uuid as string, a])),
     "app-git": gitApp,
     "app-img": imageApp,
     "db-pg": postgres,
@@ -86,7 +116,7 @@ export function createFakeCoolify(
       warnings: [],
     }),
     listProjects: async () => [{ uuid: "p1", name: "Acme" }],
-    listApplications: async () => [gitApp, imageApp],
+    listApplications: async () => [gitApp, imageApp, ...privateApps],
     listDatabases: async () => [postgres],
     listServices: async () => [],
     listServers: async () => [
@@ -94,14 +124,35 @@ export function createFakeCoolify(
     ],
     listGithubApps: async () => [
       { id: 0, name: "Public GitHub", is_public: true },
+      ...(options.privateRepos
+        ? [
+            {
+              id: 5,
+              name: "Acme Coolify App",
+              organization: "acme",
+              is_public: false,
+            },
+          ]
+        : []),
     ],
+    listSecurityKeys: async () =>
+      options.privateRepos
+        ? [
+            {
+              id: 7,
+              uuid: "key-7",
+              name: "keyed-deploy",
+              fingerprint: "SOME_FINGERPRINT_NOT_IN_DOKPLOY",
+            },
+          ]
+        : [],
     getProject: async () => ({
       uuid: "p1",
       name: "Acme",
       environments: [{ id: 1, uuid: "e1", name: "production" }],
     }),
     getEnvironment: async () => ({
-      applications: [gitApp, imageApp],
+      applications: [gitApp, imageApp, ...privateApps],
       postgresqls: [postgres],
       redis: [],
       services: [],

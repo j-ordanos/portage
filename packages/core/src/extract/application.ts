@@ -11,6 +11,12 @@ import { cleanName, num, parseFqdns, rec, str } from "./util.js";
 export interface GithubAppInfo {
   name: string;
   isPublic: boolean;
+  org?: string;
+}
+
+export interface KeyInfo {
+  name: string;
+  fingerprint?: string;
 }
 
 export interface AppContext {
@@ -18,6 +24,8 @@ export interface AppContext {
   environmentName: string;
   vault: Vault;
   githubApps: Map<number, GithubAppInfo>;
+  /** Coolify security keys by numeric id and uuid. */
+  keys?: Map<string, KeyInfo>;
 }
 
 type Source = NonNullable<IRCompose["source"]>;
@@ -31,7 +39,7 @@ type Source = NonNullable<IRCompose["source"]>;
  */
 export function mapSource(
   detail: Record<string, unknown>,
-  ctx: Pick<AppContext, "githubApps">,
+  ctx: Pick<AppContext, "githubApps" | "keys">,
 ): { source: Source; issues: Issue[] } {
   const issues: Issue[] = [];
   const pack = str(detail, "build_pack");
@@ -71,6 +79,12 @@ export function mapSource(
     : isSsh
       ? undefined
       : `https://github.com/${repo}`;
+  const keyId = detail.private_key_id;
+  const key =
+    keyId !== null && keyId !== undefined
+      ? ctx.keys?.get(String(keyId))
+      : undefined;
+  const app = sourceId !== undefined ? ctx.githubApps.get(sourceId) : undefined;
   return {
     source: {
       type: "git",
@@ -79,6 +93,15 @@ export function mapSource(
       provider,
       ...(commit && commit !== "HEAD" ? { commit } : {}),
       ...(url ? { url } : {}),
+      ...(key
+        ? {
+            keyName: key.name,
+            ...(key.fingerprint ? { keyFingerprint: key.fingerprint } : {}),
+          }
+        : {}),
+      ...(app && !app.isPublic
+        ? { appName: app.name, ...(app.org ? { appOrg: app.org } : {}) }
+        : {}),
     },
     issues,
   };

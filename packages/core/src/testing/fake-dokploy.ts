@@ -14,9 +14,14 @@ export interface FakeCall {
  * project.create adds a default "production" environment, appName gets a random suffix,
  * database ids are `<engine>Id`, deletes cascade, env strings round-trip unchanged.
  */
-export function createFakeDokploy(
-  seed: { projects?: Array<{ name: string; environments?: string[] }> } = {},
-) {
+export interface FakeDokploySeed {
+  projects?: Array<{ name: string; environments?: string[] }>;
+  /** GitHub providers and the `owner/repo` list each can access. */
+  githubProviders?: Array<{ githubId: string; name: string; repos: string[] }>;
+  sshKeys?: Array<{ sshKeyId: string; name: string; publicKey?: string }>;
+}
+
+export function createFakeDokploy(seed: FakeDokploySeed = {}) {
   let counter = 0;
   const id = (prefix: string) => `${prefix}_${++counter}`;
   const calls: FakeCall[] = [];
@@ -167,6 +172,35 @@ export function createFakeDokploy(
       };
     },
 
+    async gitProviders() {
+      record("gitProviders", false);
+      return (seed.githubProviders ?? []).map((g) => ({
+        gitProviderId: `gp_${g.githubId}`,
+        name: g.name,
+        githubId: g.githubId,
+        githubAppName: g.name,
+      }));
+    },
+    async githubRepositories(githubId) {
+      record("githubRepositories", false);
+      const provider = seed.githubProviders?.find(
+        (g) => g.githubId === githubId,
+      );
+      if (!provider)
+        throw new AppError(
+          "UPSTREAM_NOT_FOUND",
+          "Upstream resource was not found",
+        );
+      return provider.repos.map((r) => r.toLowerCase());
+    },
+    async sshKeys() {
+      record("sshKeys", false);
+      return (seed.sshKeys ?? []).map((k) => ({
+        sshKeyId: k.sshKeyId,
+        name: k.name,
+        ...(k.publicKey ? { publicKey: k.publicKey } : {}),
+      }));
+    },
     async databaseOne(engine, databaseId) {
       record("databaseOne", false);
       const row = resources.get(databaseId);
