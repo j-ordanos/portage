@@ -5,14 +5,14 @@ import {
   createCoolifyReader,
   createDokployClient,
   redactPatterns,
-  type StepRecord,
 } from "@migrator/core";
-import { Hono } from "hono";
+import argon2 from "argon2";
+import { Hono, type MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
-import { verifyPassword } from "./auth/password.js";
 import type { Config } from "./config.js";
-import { Store } from "./db/store.js";
+import { Store, type User } from "./db/store.js";
 import { ApplyManager } from "./runs/apply-manager.js";
+import { ConnectionService } from "./runs/connections.js";
 import { EventHub } from "./runs/hub.js";
 import { type Deps, RunService } from "./runs/service.js";
 
@@ -39,9 +39,13 @@ const realClients: Deps = {
     }),
 };
 
+/**
+ * 401 is reserved for "your session is missing or expired", because the UI signs you out on it.
+ * A rejected Coolify/Dokploy credential is the upstream's problem, so it gets 422.
+ */
 const STATUS_BY_CODE: Record<string, number> = {
-  UPSTREAM_AUTH: 401,
-  UPSTREAM_FORBIDDEN: 403,
+  UPSTREAM_AUTH: 422,
+  UPSTREAM_FORBIDDEN: 422,
   UPSTREAM_NOT_FOUND: 404,
   UPSTREAM_VALIDATION: 422,
   UPSTREAM_UNREACHABLE: 502,
@@ -53,10 +57,17 @@ const STATUS_BY_CODE: Record<string, number> = {
   SECRET_UNAVAILABLE: 409,
 };
 
+const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
+const SESSION_MS = 14 * 24 * 60 * 60 * 1000;
+
+type Env = { Variables: { user: User } };
+
 export function createApp(options: AppOptions) {
   const { config } = options;
   const store = options.store ?? new Store(config.DATA_DIR, config.MASTER_KEY);
-  const service = new RunService(store, options.clients ?? realClients, config);
+  const deps = options.clients ?? realClients;
+  const service = new RunService(store, deps, config);
+  const connections = new ConnectionService(store, deps, config);
   const hub = new EventHub();
   const manager = new ApplyManager(service, store, hub, {
     ...(options.sleep ? { sleep: options.sleep } : {}),
@@ -64,9 +75,10 @@ export function createApp(options: AppOptions) {
       ? { pauseBetweenWritesMs: options.pauseBetweenWritesMs }
       : {}),
   });
-  const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+  const attempts = new Map<string, { count: number; resetAt: number }>();
   const secureCookie = Boolean(config.PUBLIC_URL?.startsWith("https://"));
-  const app = new Hono();
+  const cookieName = secureCookie ? "__Host-portage" : "portage_session";
+  const app = new Hono<Env>();
 
   // ---- security headers ----
   app.use("*", async (c, next) => {
@@ -87,24 +99,29 @@ export function createApp(options: AppOptions) {
   });
 
   const readToken = (cookie: string) =>
-    cookie.match(/(?:^|;\s*)__Host-migrator=([^;]+)/)?.[1] ??
-    cookie.match(/(?:^|;\s*)migrator_session=([^;]+)/)?.[1];
+    cookie.match(new RegExp(`(?:^|;\\s*)${cookieName}=([^;]+)`))?.[1];
+  const PUBLIC = new Set([
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/me",
+    "/api/public",
+  ]);
 
   // ---- /api guard: session, body size, CSRF ----
   app.use("/api/*", async (c, next) => {
     c.header("Cache-Control", "no-store");
-    const isLogin = c.req.path === "/api/auth/login";
-    if (!isLogin) {
-      const token = readToken(c.req.header("Cookie") ?? "");
-      if (!token || !store.sessionValid(token))
-        return c.json({ message: "Unauthorized" }, 401);
-    }
     const length = c.req.header("Content-Length");
     if (length && Number(length) > 1_048_576)
       return c.json({ message: "Request body too large" }, 413);
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) && !isLogin) {
+    const isPublic = PUBLIC.has(c.req.path);
+    if (
+      ["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method) &&
+      !(isPublic && c.req.path !== "/api/auth/logout")
+    ) {
       if (c.req.header("X-Requested-With") !== "migrator")
         return c.json({ message: "Missing migration request header" }, 403);
+    }
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(c.req.method)) {
       const origin = c.req.header("Origin");
       if (origin) {
         let host: string;
@@ -117,8 +134,25 @@ export function createApp(options: AppOptions) {
           return c.json({ message: "Origin does not match this server" }, 403);
       }
     }
+    const token = readToken(c.req.header("Cookie") ?? "");
+    const userId = token ? store.sessionUser(token) : undefined;
+    const user = userId ? store.getUser(userId) : undefined;
+    if (user) c.set("user", user);
+    if (!isPublic && !user)
+      return c.json({ message: "Sign in to continue" }, 401);
     await next();
   });
+
+  // A person only ever sees their own runs.
+  const ownsRun: MiddlewareHandler<Env> = async (c, next) => {
+    const run = store.getRun(c.req.param("id") ?? "");
+    const user = c.get("user");
+    if (!run || !user || run.userId !== user.id)
+      return c.json({ message: "Run not found" }, 404);
+    await next();
+  };
+  app.use("/api/runs/:id", ownsRun);
+  app.use("/api/runs/:id/*", ownsRun);
 
   app.onError((error, c) => {
     const runId = c.req.param("id");
@@ -138,12 +172,11 @@ export function createApp(options: AppOptions) {
         status as 400,
       );
     }
-    if (error instanceof Error && error.name === "ZodError") {
+    if (error instanceof Error && error.name === "ZodError")
       return c.json(
         { code: "CONFIG_INVALID", message: "Invalid request payload" },
         400,
       );
-    }
     process.stderr.write(
       `Unhandled error: ${redact(error instanceof Error ? error.message : "unknown")}\n`,
     );
@@ -154,57 +187,177 @@ export function createApp(options: AppOptions) {
   });
 
   app.get("/healthz", (c) => c.json({ ok: true, version: VERSION }));
+  app.get("/api/public", (c) =>
+    c.json({
+      version: VERSION,
+      allowSignup: config.ALLOW_SIGNUP || store.userCount() === 0,
+      allowPrivateUpstreams: config.UPSTREAM_ALLOW_PRIVATE,
+    }),
+  );
 
-  // ---- auth ----
-  app.post("/api/auth/login", async (c) => {
-    const ip =
-      c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() ?? "local";
+  // ---- accounts ----
+  const limited = (ip: string): boolean => {
     const now = Date.now();
-    const attempt = loginAttempts.get(ip);
-    if (attempt && attempt.resetAt > now && attempt.count >= 5)
-      return c.json({ message: "Too many login attempts" }, 429);
-    loginAttempts.set(
+    const hit = attempts.get(ip);
+    if (hit && hit.resetAt > now && hit.count >= 8) return true;
+    attempts.set(
       ip,
-      attempt && attempt.resetAt > now
-        ? { count: attempt.count + 1, resetAt: attempt.resetAt }
+      hit && hit.resetAt > now
+        ? { count: hit.count + 1, resetAt: hit.resetAt }
         : { count: 1, resetAt: now + 60_000 },
     );
-    const body = (await c.req.json().catch(() => ({}))) as {
-      password?: unknown;
-    };
-    const ok =
-      typeof body.password === "string" &&
-      (await verifyPassword(body.password, config.ADMIN_PASSWORD_HASH));
-    if (!ok) return c.json({ message: "Incorrect password" }, 401);
-    loginAttempts.delete(ip);
-    const token = store.createSession(12 * 60 * 60 * 1000);
+    return false;
+  };
+  const startSession = (
+    c: { header: (n: string, v: string) => void },
+    userId: string,
+  ) => {
+    const token = store.createSession(userId, SESSION_MS);
     c.header(
       "Set-Cookie",
-      secureCookie
-        ? `__Host-migrator=${token}; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=43200`
-        : `migrator_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200`,
+      `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MS / 1000}${secureCookie ? "; Secure" : ""}`,
     );
-    return c.json({ ok: true });
+  };
+  const ipOf = (c: { req: { header: (n: string) => string | undefined } }) =>
+    c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() ?? "local";
+
+  app.post("/api/auth/register", async (c) => {
+    if (limited(ipOf(c)))
+      return c.json(
+        { message: "Too many attempts. Wait a minute and try again." },
+        429,
+      );
+    const first = store.userCount() === 0;
+    if (!first && !config.ALLOW_SIGNUP)
+      return c.json({ message: "Sign-ups are closed on this server" }, 403);
+    const body = (await c.req.json().catch(() => ({}))) as {
+      email?: unknown;
+      password?: unknown;
+    };
+    const email =
+      typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    if (!EMAIL.test(email))
+      return c.json({ message: "Enter a valid email address" }, 400);
+    if (password.length < 10)
+      return c.json(
+        { message: "Use at least 10 characters for the password" },
+        400,
+      );
+    if (password.length > 200)
+      return c.json({ message: "That password is too long" }, 400);
+    if (store.getUserByEmail(email))
+      return c.json(
+        {
+          message:
+            "An account with this email already exists. Sign in instead.",
+        },
+        409,
+      );
+    const user = store.createUser(
+      email,
+      await argon2.hash(password, { type: argon2.argon2id }),
+    );
+    if (first) store.adoptOrphanRuns(user.id); // upgrade path from the single-password version
+    startSession(c, user.id);
+    return c.json({ user: { id: user.id, email: user.email } }, 201);
+  });
+  app.post("/api/auth/login", async (c) => {
+    if (limited(ipOf(c)))
+      return c.json(
+        { message: "Too many attempts. Wait a minute and try again." },
+        429,
+      );
+    const body = (await c.req.json().catch(() => ({}))) as {
+      email?: unknown;
+      password?: unknown;
+    };
+    const email =
+      typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const user = store.getUserByEmail(email);
+    // verify against a dummy hash when the user does not exist, so timing does not reveal which emails are registered
+    const hash =
+      user?.passwordHash ??
+      "$argon2id$v=19$m=65536,t=3,p=4$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const ok =
+      typeof body.password === "string" &&
+      (await argon2.verify(hash, body.password).catch(() => false));
+    if (!user || !ok)
+      return c.json({ message: "Email or password is incorrect" }, 401);
+    store.touchLogin(user.id);
+    startSession(c, user.id);
+    return c.json({ user: { id: user.id, email: user.email } });
   });
   app.post("/api/auth/logout", (c) => {
     const token = readToken(c.req.header("Cookie") ?? "");
     if (token) store.deleteSession(token);
     c.header(
       "Set-Cookie",
-      `${secureCookie ? "__Host-migrator" : "migrator_session"}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`,
+      `${cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secureCookie ? "; Secure" : ""}`,
     );
     return c.json({ ok: true });
   });
-  app.get("/api/auth/me", (c) =>
-    c.json({ authenticated: true, version: VERSION }),
+  // 200 for visitors too: "not signed in" is a normal state of the landing page, not an error
+  app.get("/api/auth/me", (c) => {
+    const user = c.get("user") as User | undefined;
+    return c.json(
+      user
+        ? { authenticated: true, user: { id: user.id, email: user.email } }
+        : { authenticated: false },
+    );
+  });
+  app.put("/api/auth/password", async (c) => {
+    const user = c.get("user") as User;
+    const body = (await c.req.json().catch(() => ({}))) as {
+      current?: unknown;
+      next?: unknown;
+    };
+    const row = store.getUserByEmail(user.email);
+    if (
+      !row ||
+      typeof body.current !== "string" ||
+      !(await argon2.verify(row.passwordHash, body.current).catch(() => false))
+    ) {
+      return c.json({ message: "Your current password is not correct" }, 403);
+    }
+    if (typeof body.next !== "string" || body.next.length < 10)
+      return c.json(
+        { message: "Use at least 10 characters for the new password" },
+        400,
+      );
+    store.changePassword(
+      user.id,
+      await argon2.hash(body.next, { type: argon2.argon2id }),
+    );
+    startSession(c, user.id); // changing the password signs out every session; keep this one
+    return c.json({ ok: true });
+  });
+
+  // ---- saved connections ----
+  const uid = (c: { get: (k: "user") => User }) => c.get("user").id;
+  app.get("/api/connections", (c) =>
+    c.json({ connections: connections.list(uid(c)) }),
   );
-  app.get("/api/settings", (c) =>
-    c.json({
-      version: VERSION,
-      retentionDays: config.RUN_RETENTION_DAYS,
-      allowPrivateUpstreams: config.UPSTREAM_ALLOW_PRIVATE,
-    }),
+  app.post("/api/connections", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(await connections.create(uid(c), body as never), 201);
+  });
+  app.put("/api/connections/:id", async (c) =>
+    c.json(
+      await connections.update(
+        uid(c),
+        c.req.param("id"),
+        (await c.req.json().catch(() => ({}))) as never,
+      ),
+    ),
   );
+  app.post("/api/connections/:id/test", async (c) =>
+    c.json(await connections.test(uid(c), c.req.param("id"))),
+  );
+  app.delete("/api/connections/:id", (c) => {
+    connections.delete(uid(c), c.req.param("id"));
+    return c.json({ ok: true });
+  });
 
   // ---- runs ----
   const view = (id: string) => {
@@ -223,7 +376,7 @@ export function createApp(options: AppOptions) {
       hasInventory: run.ir !== null,
       hasPlan: run.plan !== null,
       applying: manager.isActive(id),
-      credentialsActive: store.getCredentials(id, false) !== undefined,
+      credentialsActive: service.credentialsAvailable(id),
       progress: {
         total: steps.length,
         done: steps.filter((s) => s.state === "done").length,
@@ -235,7 +388,7 @@ export function createApp(options: AppOptions) {
 
   app.get("/api/runs", (c) =>
     c.json({
-      runs: store.listRuns().map((r) => ({
+      runs: store.listRuns(uid(c)).map((r) => ({
         id: r.id,
         name: r.name,
         status: r.status,
@@ -243,38 +396,30 @@ export function createApp(options: AppOptions) {
         updatedAt: r.updatedAt,
         coolifyUrl: r.coolifyUrl,
         dokployUrl: r.dokployUrl,
+        progress: (() => {
+          const steps = store.listSteps(r.id);
+          return {
+            total: steps.length,
+            done: steps.filter((s) => s.state === "done").length,
+          };
+        })(),
       })),
     }),
   );
   app.post("/api/runs", async (c) => {
     const body = (await c.req.json().catch(() => null)) as {
-      coolify?: { url?: string; token?: string; allowInsecureHttp?: boolean };
-      dokploy?: { url?: string; apiKey?: string; allowInsecureHttp?: boolean };
+      coolifyConnectionId?: string;
+      dokployConnectionId?: string;
     } | null;
-    if (
-      !body?.coolify?.url ||
-      !body.coolify.token ||
-      !body.dokploy?.url ||
-      !body.dokploy.apiKey
-    ) {
+    if (!body?.coolifyConnectionId || !body.dokployConnectionId) {
       return c.json(
-        {
-          message: "Coolify URL + token and Dokploy URL + API key are required",
-        },
+        { message: "Choose a Coolify connection and a Dokploy connection" },
         400,
       );
     }
-    const result = await service.connect({
-      coolify: {
-        url: body.coolify.url,
-        token: body.coolify.token,
-        allowInsecureHttp: body.coolify.allowInsecureHttp === true,
-      },
-      dokploy: {
-        url: body.dokploy.url,
-        apiKey: body.dokploy.apiKey,
-        allowInsecureHttp: body.dokploy.allowInsecureHttp === true,
-      },
+    const result = await service.connect(uid(c), {
+      coolifyConnectionId: body.coolifyConnectionId,
+      dokployConnectionId: body.dokployConnectionId,
     });
     return c.json(
       {
@@ -290,14 +435,6 @@ export function createApp(options: AppOptions) {
     if (manager.isActive(c.req.param("id")))
       return c.json({ message: "Pause or cancel the run first" }, 409);
     service.purge(c.req.param("id"));
-    return c.json({ ok: true });
-  });
-  app.put("/api/runs/:id/credentials", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as {
-      dokployApiKey?: string;
-      coolifyToken?: string;
-    };
-    await service.reenterCredentials(c.req.param("id"), body);
     return c.json({ ok: true });
   });
 
@@ -359,7 +496,6 @@ export function createApp(options: AppOptions) {
 
   app.get("/api/runs/:id/events", (c) => {
     const runId = c.req.param("id");
-    service.getRun(runId);
     const last =
       Number(c.req.header("Last-Event-ID") ?? c.req.query("after") ?? 0) || 0;
     return streamSSE(c, async (stream) => {
@@ -451,6 +587,16 @@ export function createApp(options: AppOptions) {
       return c.notFound();
     }
   });
+  app.get("/favicon.svg", async (c) => {
+    try {
+      return new Response(
+        await readFile(new URL("../dist/web/favicon.svg", import.meta.url)),
+        { headers: { "Content-Type": "image/svg+xml" } },
+      );
+    } catch {
+      return c.notFound();
+    }
+  });
   app.get("*", async (c) => {
     try {
       return c.html(
@@ -461,12 +607,10 @@ export function createApp(options: AppOptions) {
       );
     } catch {
       return c.text(
-        "Migrator server is running. Build the web app to serve the SPA.",
+        "Portage is running. Build the web app to serve the interface.",
       );
     }
   });
 
-  return Object.assign(app, { store, service, manager, hub });
+  return Object.assign(app, { store, service, connections, manager, hub });
 }
-
-export type { StepRecord };

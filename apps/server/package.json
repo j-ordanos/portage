@@ -8,8 +8,7 @@
     "dev": "pnpm --dir ../web build && node -e \"require('node:fs').rmSync('dist/web',{recursive:true,force:true});require('node:fs').cpSync('../web/dist','dist/web',{recursive:true})\" && PORT=3001 tsx watch src/index.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
-    "hash-password": "tsx src/hash-password.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@hono/node-server": "1.14.4",

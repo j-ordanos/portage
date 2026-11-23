@@ -12,8 +12,31 @@ import {
 } from "@migrator/core";
 import Database from "better-sqlite3";
 
+export interface User {
+  id: string;
+  email: string;
+  createdAt: number;
+}
+
+/** A saved Coolify or Dokploy server. The secret is sealed on disk and never leaves the server. */
+export interface ConnectionRow {
+  id: string;
+  userId: string;
+  kind: "coolify" | "dokploy";
+  name: string;
+  url: string;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt: number | null;
+  /** Result of the last connection test (version or a short error), safe to show. */
+  check: { ok: boolean; version?: string; message?: string; at: number } | null;
+}
+
 export interface RunRow {
   id: string;
+  userId: string | null;
+  coolifyConnectionId: string | null;
+  dokployConnectionId: string | null;
   name: string;
   status: string;
   createdAt: number;
@@ -61,6 +84,17 @@ const RUN_TTL = 7 * DAY;
 const CRED_TTL = DAY;
 
 const SCHEMA = `
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL, last_login_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS connections (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('coolify','dokploy')), name TEXT NOT NULL COLLATE NOCASE,
+    url TEXT NOT NULL, ciphertext TEXT NOT NULL,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_used_at INTEGER, check_json TEXT,
+    UNIQUE (user_id, kind, name)
+  );
   CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
@@ -100,7 +134,8 @@ const SCHEMA = `
     PRIMARY KEY (run_id, item_id)
   );
   CREATE TABLE IF NOT EXISTS sessions (
-    token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL
+    token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE
   );
 `;
 
@@ -126,26 +161,115 @@ export class Store {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
     this.db.exec(SCHEMA);
+    this.migrate();
+  }
+
+  /** Upgrades databases created by earlier versions in place. */
+  private migrate(): void {
+    const has = (table: string, column: string) =>
+      (
+        this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+          name: string;
+        }>
+      ).some((c) => c.name === column);
+    if (!has("sessions", "user_id")) {
+      // sessions from the single-password era have no owner: sign everyone in again
+      this.db.exec(
+        "DROP TABLE sessions; CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, user_id TEXT REFERENCES users(id) ON DELETE CASCADE);",
+      );
+    }
+    for (const [column, ddl] of [
+      ["user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE"],
+      ["coolify_connection_id", "TEXT"],
+      ["dokploy_connection_id", "TEXT"],
+    ] as const) {
+      if (!has("runs", column))
+        this.db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${ddl}`);
+    }
+  }
+
+  // ---- users ----
+  userCount(): number {
+    return (
+      this.db.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number }
+    ).n;
+  }
+  createUser(email: string, passwordHash: string): User {
+    const id = randomBytes(9).toString("base64url");
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(id, email, passwordHash, now);
+    return { id, email, createdAt: now };
+  }
+  getUserByEmail(email: string): (User & { passwordHash: string }) | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT id, email, password_hash, created_at FROM users WHERE email = ?",
+      )
+      .get(email) as
+      | { id: string; email: string; password_hash: string; created_at: number }
+      | undefined;
+    return row
+      ? {
+          id: row.id,
+          email: row.email,
+          createdAt: row.created_at,
+          passwordHash: row.password_hash,
+        }
+      : undefined;
+  }
+  getUser(id: string): User | undefined {
+    const row = this.db
+      .prepare("SELECT id, email, created_at FROM users WHERE id = ?")
+      .get(id) as { id: string; email: string; created_at: number } | undefined;
+    return row
+      ? { id: row.id, email: row.email, createdAt: row.created_at }
+      : undefined;
+  }
+  touchLogin(userId: string): void {
+    this.db
+      .prepare("UPDATE users SET last_login_at = ? WHERE id = ?")
+      .run(Date.now(), userId);
+  }
+  /** Upgrade path: runs created before accounts existed belong to the first person who signs up. */
+  adoptOrphanRuns(userId: string): number {
+    return this.db
+      .prepare("UPDATE runs SET user_id = ? WHERE user_id IS NULL")
+      .run(userId).changes;
+  }
+  changePassword(userId: string, passwordHash: string): void {
+    this.db
+      .prepare("UPDATE users SET password_hash = ? WHERE id = ?")
+      .run(passwordHash, userId);
+    this.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId); // sign out everywhere
   }
 
   // ---- sessions (token is random 256-bit; only its hash is stored) ----
-  createSession(ttlMs: number): string {
+  createSession(userId: string, ttlMs: number): string {
     const token = randomBytes(32).toString("base64url");
     this.db
-      .prepare("INSERT INTO sessions (token_hash, expires_at) VALUES (?, ?)")
-      .run(hashToken(token), Date.now() + ttlMs);
+      .prepare(
+        "INSERT INTO sessions (token_hash, expires_at, user_id) VALUES (?, ?, ?)",
+      )
+      .run(hashToken(token), Date.now() + ttlMs, userId);
     return token;
   }
-  sessionValid(token: string): boolean {
+  /** The signed-in user's id, or undefined for a missing, expired or unknown session. */
+  sessionUser(token: string): string | undefined {
     const row = this.db
-      .prepare("SELECT expires_at FROM sessions WHERE token_hash = ?")
-      .get(hashToken(token)) as { expires_at: number } | undefined;
-    if (!row) return false;
+      .prepare("SELECT expires_at, user_id FROM sessions WHERE token_hash = ?")
+      .get(hashToken(token)) as
+      | { expires_at: number; user_id: string | null }
+      | undefined;
+    if (!row?.user_id) return undefined;
     if (row.expires_at <= Date.now()) {
       this.deleteSession(token);
-      return false;
+      return undefined;
     }
-    return true;
+    return row.user_id;
   }
   deleteSession(token: string): void {
     this.db
@@ -153,8 +277,132 @@ export class Store {
       .run(hashToken(token));
   }
 
+  // ---- saved connections ----
+  private mapConnection(row: Record<string, unknown>): ConnectionRow {
+    return {
+      id: row.id as string,
+      userId: row.user_id as string,
+      kind: row.kind as "coolify" | "dokploy",
+      name: row.name as string,
+      url: row.url as string,
+      createdAt: row.created_at as number,
+      updatedAt: row.updated_at as number,
+      lastUsedAt: (row.last_used_at as number | null) ?? null,
+      check: parse(row.check_json as string | null),
+    };
+  }
+  createConnection(input: {
+    userId: string;
+    kind: "coolify" | "dokploy";
+    name: string;
+    url: string;
+    secret: string;
+    check: ConnectionRow["check"];
+  }): ConnectionRow {
+    const id = randomBytes(9).toString("base64url");
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO connections (id, user_id, kind, name, url, ciphertext, created_at, updated_at, check_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        id,
+        input.userId,
+        input.kind,
+        input.name,
+        input.url,
+        seal(input.secret, this.masterKey),
+        now,
+        now,
+        input.check ? JSON.stringify(input.check) : null,
+      );
+    return this.getConnection(id, input.userId) as ConnectionRow;
+  }
+  listConnections(userId: string): ConnectionRow[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT * FROM connections WHERE user_id = ? ORDER BY kind, name",
+        )
+        .all(userId) as Record<string, unknown>[]
+    ).map((r) => this.mapConnection(r));
+  }
+  getConnection(id: string, userId: string): ConnectionRow | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM connections WHERE id = ? AND user_id = ?")
+      .get(id, userId) as Record<string, unknown> | undefined;
+    return row ? this.mapConnection(row) : undefined;
+  }
+  /** The decrypted secret. Only server code that is about to call the upstream may use this. */
+  connectionSecret(id: string): string | undefined {
+    const row = this.db
+      .prepare("SELECT ciphertext FROM connections WHERE id = ?")
+      .get(id) as { ciphertext: string } | undefined;
+    return row ? openSealed(row.ciphertext, this.masterKey) : undefined;
+  }
+  /** URL + decrypted secret by id, for rebuilding a run's credentials. Server-internal. */
+  connectionRaw(id: string): { url: string; secret: string } | undefined {
+    const row = this.db
+      .prepare("SELECT url, ciphertext FROM connections WHERE id = ?")
+      .get(id) as { url: string; ciphertext: string } | undefined;
+    return row
+      ? { url: row.url, secret: openSealed(row.ciphertext, this.masterKey) }
+      : undefined;
+  }
+  updateConnection(
+    id: string,
+    userId: string,
+    patch: {
+      name?: string;
+      url?: string;
+      secret?: string;
+      check?: ConnectionRow["check"];
+    },
+  ): void {
+    const sets = ["updated_at = ?"];
+    const values: unknown[] = [Date.now()];
+    const set = (column: string, value: unknown) => {
+      sets.push(`${column} = ?`);
+      values.push(value);
+    };
+    if (patch.name !== undefined) set("name", patch.name);
+    if (patch.url !== undefined) set("url", patch.url);
+    if (patch.secret !== undefined)
+      set("ciphertext", seal(patch.secret, this.masterKey));
+    if (patch.check !== undefined)
+      set("check_json", patch.check ? JSON.stringify(patch.check) : null);
+    this.db
+      .prepare(
+        `UPDATE connections SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`,
+      )
+      .run(...values, id, userId);
+  }
+  touchConnection(id: string): void {
+    this.db
+      .prepare("UPDATE connections SET last_used_at = ? WHERE id = ?")
+      .run(Date.now(), id);
+  }
+  deleteConnection(id: string, userId: string): void {
+    this.db
+      .prepare("DELETE FROM connections WHERE id = ? AND user_id = ?")
+      .run(id, userId);
+  }
+  /** Runs that still need this connection (so it cannot be deleted from under an apply). */
+  activeRunsUsing(connectionId: string): number {
+    return (
+      this.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM runs WHERE (coolify_connection_id = ? OR dokploy_connection_id = ?) AND status IN ('running','paused','paused_failed')",
+        )
+        .get(connectionId, connectionId) as { n: number }
+    ).n;
+  }
+
   // ---- runs ----
   createRun(input: {
+    userId: string;
+    coolifyConnectionId: string;
+    dokployConnectionId: string;
     name: string;
     coolifyUrl: string;
     dokployUrl: string;
@@ -167,11 +415,14 @@ export class Store {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO runs (id, name, status, created_at, updated_at, expires_at, coolify_url, dokploy_url, coolify_version, dokploy_version, notice_accepted_at)
-           VALUES (?, ?, 'connected', ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO runs (id, user_id, coolify_connection_id, dokploy_connection_id, name, status, created_at, updated_at, expires_at, coolify_url, dokploy_url, coolify_version, dokploy_version, notice_accepted_at)
+           VALUES (?, ?, ?, ?, ?, 'connected', ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
+          input.userId,
+          input.coolifyConnectionId,
+          input.dokployConnectionId,
           input.name,
           now,
           now,
@@ -190,6 +441,9 @@ export class Store {
   private mapRun(row: Record<string, unknown>): RunRow {
     return {
       id: row.id as string,
+      userId: (row.user_id as string | null) ?? null,
+      coolifyConnectionId: (row.coolify_connection_id as string | null) ?? null,
+      dokployConnectionId: (row.dokploy_connection_id as string | null) ?? null,
       name: row.name as string,
       status: row.status as string,
       createdAt: row.created_at as number,
@@ -211,12 +465,18 @@ export class Store {
       | undefined;
     return row ? this.mapRun(row) : undefined;
   }
-  listRuns(): RunRow[] {
-    return (
-      this.db
-        .prepare("SELECT * FROM runs ORDER BY updated_at DESC")
-        .all() as Record<string, unknown>[]
-    ).map((r) => this.mapRun(r));
+  /** `userId` limits the list to one person's runs; omit it only for server-internal sweeps. */
+  listRuns(userId?: string): RunRow[] {
+    const rows = (
+      userId === undefined
+        ? this.db.prepare("SELECT * FROM runs ORDER BY updated_at DESC").all()
+        : this.db
+            .prepare(
+              "SELECT * FROM runs WHERE user_id = ? ORDER BY updated_at DESC",
+            )
+            .all(userId)
+    ) as Record<string, unknown>[];
+    return rows.map((r) => this.mapRun(r));
   }
   updateRun(
     id: string,

@@ -12,7 +12,7 @@ if (process.env.NODE_ENV !== "test") {
   try {
     config = readConfig();
   } catch (error) {
-    // never print values: readConfig only names the missing/invalid fields
+    // never print values: readConfig only names what is wrong
     process.stderr.write(
       `${error instanceof Error ? error.message : "Invalid configuration"}\n`,
     );
@@ -26,5 +26,10 @@ if (process.env.NODE_ENV !== "test") {
   if (resumed > 0)
     process.stdout.write(`Resumed ${resumed} interrupted migration(s)\n`);
   serve({ fetch: app.fetch, port: config.PORT });
-  process.stdout.write(`Migrator listening on :${config.PORT}\n`);
+  process.stdout.write(`Portage listening on :${config.PORT}\n`);
+  if (config.MASTER_KEY_SOURCE === "file") {
+    process.stdout.write(
+      `Saved tokens are sealed with a key stored in ${config.DATA_DIR}/master.key. For stronger protection set MASTER_KEY (openssl rand -base64 32) so the key lives apart from the data.\n`,
+    );
+  }
 }

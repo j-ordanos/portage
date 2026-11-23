@@ -22,7 +22,6 @@ import {
   sshFingerprint,
   type TargetSnapshot,
   validatePlan,
-  validateUpstreamUrl,
   verifyMigration,
 } from "@migrator/core";
 import type { Config } from "../config.js";
@@ -50,76 +49,101 @@ export class RunService {
     private readonly config: Config,
   ) {}
 
-  private normalizeUrl(input: string, allowInsecureHttp: boolean): string {
-    const allowedHosts = this.config.UPSTREAM_ALLOWED_HOSTS?.split(",")
-      .map((h) => h.trim().toLowerCase())
-      .filter(Boolean);
-    try {
-      return validateUpstreamUrl(
-        input,
-        {
-          allowPrivate: this.config.UPSTREAM_ALLOW_PRIVATE,
-          ...(allowedHosts?.length ? { allowedHosts } : {}),
-        },
-        allowInsecureHttp,
-      ).toString();
-    } catch (error) {
-      throw http(error instanceof Error ? error.message : "Invalid URL", 400);
-    }
-  }
-
   getRun(runId: string): RunRow {
     const run = this.store.getRun(runId);
     if (!run) throw http("Run not found", 404, "UPSTREAM_NOT_FOUND");
     return run;
   }
 
+  /**
+   * Credentials for a run. A run keeps a short-lived sealed copy; when it has expired (24 h idle) it is rebuilt
+   * from the saved connections, so nobody has to type a key again. Fails only if a connection was deleted.
+   */
   credentials(runId: string): Credentials {
-    const creds = this.store.getCredentials(runId);
-    if (!creds) {
+    const existing = this.store.getCredentials(runId);
+    if (existing) return existing;
+    const run = this.getRun(runId);
+    const coolify = run.coolifyConnectionId
+      ? this.store.connectionRaw(run.coolifyConnectionId)
+      : undefined;
+    const dokploy = run.dokployConnectionId
+      ? this.store.connectionRaw(run.dokployConnectionId)
+      : undefined;
+    if (!coolify || !dokploy) {
       throw http(
-        "Credentials expired for this run; enter the API keys again",
-        401,
+        "A saved connection used by this migration was deleted. Add it again in Settings.",
+        409,
         "UPSTREAM_AUTH",
       );
     }
-    return creds;
+    const rebuilt: Credentials = {
+      coolify: { url: coolify.url, token: coolify.secret },
+      dokploy: { url: dokploy.url, apiKey: dokploy.secret },
+    };
+    this.store.setCredentials(runId, rebuilt);
+    return rebuilt;
   }
 
-  /** Test both connections (read-only) and start a run. Credentials are sealed immediately. */
-  async connect(input: {
-    coolify: { url: string; token: string; allowInsecureHttp?: boolean };
-    dokploy: { url: string; apiKey: string; allowInsecureHttp?: boolean };
-  }): Promise<{
+  /** Whether the run can reach its servers (a live copy, or saved connections to rebuild it from). */
+  credentialsAvailable(runId: string): boolean {
+    if (this.store.getCredentials(runId, false)) return true;
+    const run = this.store.getRun(runId);
+    return Boolean(
+      run?.coolifyConnectionId &&
+        run.dokployConnectionId &&
+        this.store.connectionRaw(run.coolifyConnectionId) &&
+        this.store.connectionRaw(run.dokployConnectionId),
+    );
+  }
+
+  /** Start a run from two saved connections. Both are re-tested (read-only) so a stale token is caught now. */
+  async connect(
+    userId: string,
+    input: { coolifyConnectionId: string; dokployConnectionId: string },
+  ): Promise<{
     run: RunRow;
     coolify: { version: string; warnings: string[] };
     dokploy: { version: string; authStyle: string };
   }> {
-    const coolifyUrl = this.normalizeUrl(
-      input.coolify.url,
-      input.coolify.allowInsecureHttp === true,
+    const coolifyRow = this.store.getConnection(
+      input.coolifyConnectionId,
+      userId,
     );
-    const dokployUrl = this.normalizeUrl(
-      input.dokploy.url,
-      input.dokploy.allowInsecureHttp === true,
+    const dokployRow = this.store.getConnection(
+      input.dokployConnectionId,
+      userId,
     );
+    if (!coolifyRow || coolifyRow.kind !== "coolify")
+      throw http("Choose a saved Coolify connection", 400);
+    if (!dokployRow || dokployRow.kind !== "dokploy")
+      throw http("Choose a saved Dokploy connection", 400);
     const credentials: Credentials = {
-      coolify: { url: coolifyUrl, token: input.coolify.token },
-      dokploy: { url: dokployUrl, apiKey: input.dokploy.apiKey },
+      coolify: {
+        url: coolifyRow.url,
+        token: this.store.connectionSecret(coolifyRow.id) as string,
+      },
+      dokploy: {
+        url: dokployRow.url,
+        apiKey: this.store.connectionSecret(dokployRow.id) as string,
+      },
     };
-    const reader = this.deps.coolify(credentials.coolify);
-    const coolifyProbe = await reader.probe();
+    const coolifyProbe = await this.deps.coolify(credentials.coolify).probe();
     const client = this.deps.dokploy(credentials.dokploy);
     const dokployProbe = await client.probe();
     await client.projectAll();
     const run = this.store.createRun({
-      name: `Migration ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
-      coolifyUrl,
-      dokployUrl,
+      userId,
+      coolifyConnectionId: coolifyRow.id,
+      dokployConnectionId: dokployRow.id,
+      name: `${coolifyRow.name} to ${dokployRow.name}`,
+      coolifyUrl: coolifyRow.url,
+      dokployUrl: dokployRow.url,
       coolifyVersion: coolifyProbe.version,
       dokployVersion: dokployProbe.version,
       credentials,
     });
+    this.store.touchConnection(coolifyRow.id);
+    this.store.touchConnection(dokployRow.id);
     return {
       run,
       coolify: {
@@ -131,27 +155,6 @@ export class RunService {
         authStyle: dokployProbe.authStyle,
       },
     };
-  }
-
-  /** Re-enter the Dokploy key (and optionally Coolify token) after the 24 h credential TTL or a revoked key. */
-  async reenterCredentials(
-    runId: string,
-    input: { dokployApiKey?: string; coolifyToken?: string },
-  ): Promise<void> {
-    const run = this.getRun(runId);
-    const current = this.store.getCredentials(runId, false);
-    const credentials: Credentials = {
-      coolify: {
-        url: run.coolifyUrl,
-        token: input.coolifyToken ?? current?.coolify.token ?? "",
-      },
-      dokploy: {
-        url: run.dokployUrl,
-        apiKey: input.dokployApiKey ?? current?.dokploy.apiKey ?? "",
-      },
-    };
-    await this.deps.dokploy(credentials.dokploy).projectAll(); // fail early if the key is wrong
-    this.store.setCredentials(runId, credentials);
   }
 
   async discover(runId: string): Promise<IR> {
