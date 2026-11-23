@@ -18,6 +18,7 @@ export * from "./errors.js";
 export * from "./extract/inventory.js";
 export * from "./ir/schema.js";
 export * from "./plan/build-plan.js";
+export * from "./plan/git-link.js";
 export * from "./plan/types.js";
 export * from "./redact/redact.js";
 export * from "./report/migration-report.js";
