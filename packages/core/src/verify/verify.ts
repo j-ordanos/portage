@@ -34,7 +34,10 @@ const lower = (value: unknown) => String(value ?? "").toLowerCase();
 export async function verifyMigration(
   plan: Plan,
   entries: IdEntry[],
-  dokploy: Pick<DokployClient, "applicationOne" | "composeOne" | "projectOne">,
+  dokploy: Pick<
+    DokployClient,
+    "applicationOne" | "composeOne" | "projectOne" | "databaseOne"
+  >,
 ): Promise<VerifyCheck[]> {
   const checks: VerifyCheck[] = [];
   const target = (srcId: string, kind: string) =>
@@ -89,12 +92,14 @@ export async function verifyMigration(
           typeof step.payload.image === "string" &&
           step.payload.image !== "unknown"
         ) {
+          // project.one returns trimmed database rows (no image): read the full row.
+          const full = await dokploy.databaseOne(engine, id);
           add(
             "image",
-            lower(row.dockerImage) === lower(step.payload.image)
+            lower(full.dockerImage) === lower(step.payload.image)
               ? "pass"
               : "fail",
-            String(row.dockerImage),
+            String(full.dockerImage),
           );
         }
         continue;

@@ -95,14 +95,25 @@ export function createFakeDokploy(
           isDefault: e.isDefault,
           applications: inEnv("applications") as never,
           compose: inEnv("compose") as never,
-          postgres: inEnv("postgres") as never,
-          mysql: inEnv("mysql") as never,
-          mariadb: inEnv("mariadb") as never,
-          mongo: inEnv("mongo") as never,
-          redis: inEnv("redis") as never,
+          // Real Dokploy returns trimmed database rows here (no image/credentials); the full row needs <engine>.one
+          postgres: inEnv("postgres").map(trimDb) as never,
+          mysql: inEnv("mysql").map(trimDb) as never,
+          mariadb: inEnv("mariadb").map(trimDb) as never,
+          mongo: inEnv("mongo").map(trimDb) as never,
+          redis: inEnv("redis").map(trimDb) as never,
         };
       }),
     }));
+  const trimDb = (row: Rec): Rec => {
+    const {
+      dockerImage: _i,
+      databasePassword: _p,
+      databaseUser: _u,
+      databaseName: _n,
+      ...rest
+    } = row;
+    return rest;
+  };
   const suffix = () => Math.random().toString(36).slice(2, 8);
   const resourceWith = (key: string, value: string): Rec => {
     const row = resources.get(value);
@@ -154,6 +165,17 @@ export function createFakeDokploy(
         domains: childrenOf(composeId, domains),
         mounts: childrenOf(composeId, mounts),
       };
+    },
+
+    async databaseOne(engine, databaseId) {
+      record("databaseOne", false);
+      const row = resources.get(databaseId);
+      if (!row || row.type !== engine)
+        throw new AppError(
+          "UPSTREAM_NOT_FOUND",
+          "Upstream resource was not found",
+        );
+      return { ...row };
     },
 
     async projectCreate(input) {

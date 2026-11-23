@@ -93,6 +93,11 @@ export interface DokployClient {
   serverAll(): Promise<Array<z.infer<typeof serverSchema>>>;
   applicationOne(applicationId: string): Promise<Record<string, unknown>>;
   composeOne(composeId: string): Promise<Record<string, unknown>>;
+  /** project.one returns trimmed database rows; the full row (image, user, …) needs `<engine>.one`. */
+  databaseOne(
+    engine: DatabaseEngine,
+    databaseId: string,
+  ): Promise<Record<string, unknown>>;
 
   projectCreate(input: { name: string; description?: string }): Promise<{
     projectId: string;
@@ -300,6 +305,13 @@ export function createDokployClient(
       return object(
         await read("/api/compose.one", { composeId }),
         "compose.one",
+      );
+    },
+
+    async databaseOne(engine, databaseId) {
+      return object(
+        await read(`/api/${engine}.one`, { [`${engine}Id`]: databaseId }),
+        `${engine}.one`,
       );
     },
 
