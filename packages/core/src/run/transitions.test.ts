@@ -8,7 +8,14 @@ describe("run transitions", () => {
     expect(transitionRun("running", "applied")).toBe("applied");
   });
 
+  it("lets users go back and re-plan or re-discover before applying", () => {
+    expect(transitionRun("planned", "selected")).toBe("selected");
+    expect(transitionRun("selected", "discovering")).toBe("discovering");
+    expect(transitionRun("applied", "rolled_back")).toBe("rolled_back");
+  });
+
   it("rejects illegal transitions", () => {
+    expect(() => transitionRun("rolled_back", "running")).toThrow("Illegal");
     expect(() => transitionRun("draft", "completed")).toThrow(
       "Illegal run transition",
     );

@@ -7,6 +7,7 @@ import {
   validatePlan,
 } from "../plan/build-plan.js";
 import { defaultOptions, type Options } from "../plan/types.js";
+import { renderMigrationReport } from "../report/migration-report.js";
 import {
   buildRollbackPlan,
   executeRollbackStep,
@@ -15,6 +16,7 @@ import {
 import { createFakeDokploy } from "../testing/fake-dokploy.js";
 import { createMemoryIdMap } from "../testing/memory-idmap.js";
 import { MemoryVault } from "../vault.js";
+import { verifyMigration } from "../verify/verify.js";
 import type { ApplyContext } from "./executor.js";
 import { runPlan } from "./runner.js";
 
@@ -637,5 +639,67 @@ describe("rollback", () => {
     // idempotent: a second pass treats 404 as done
     for (const step of rollback.steps)
       expect((await executeRollbackStep(step, fake.client)).deleted).toBe(true);
+  });
+});
+
+describe("verify", () => {
+  it("passes after a clean apply and flags a deliberately altered target", async () => {
+    const { plan, fake, ctx, idMap } = await setup();
+    await runPlan(plan, ctx, { hooks: noSleep });
+    const entries = idMap.entries("run1");
+    const clean = await verifyMigration(plan, entries, fake.client);
+    expect(clean.length).toBeGreaterThan(10);
+    expect(clean.filter((c) => c.status !== "pass")).toEqual([]);
+    expect(JSON.stringify(clean)).not.toMatch(/CANARY_/);
+
+    // someone removes a domain and a mount in Dokploy after the migration
+    const state = fake.snapshot();
+    await fake.client.domainDelete(state.domains[0]?.domainId as string);
+    await fake.client.mountDelete(state.mounts[0]?.mountId as string);
+    const drifted = await verifyMigration(plan, entries, fake.client);
+    const failed = drifted
+      .filter((c) => c.status === "fail")
+      .map((c) => c.check);
+    expect(failed).toEqual(expect.arrayContaining(["domains", "mounts"]));
+  });
+
+  it("reports resources that were never created", async () => {
+    const { plan, fake } = await setup();
+    const checks = await verifyMigration(plan, [], fake.client);
+    expect(
+      checks.every((c) => c.status === "fail" && c.check === "exists"),
+    ).toBe(true);
+  });
+});
+
+describe("migration report", () => {
+  it("lists what was created and what still needs a human, without any secret", async () => {
+    const { plan, fake, ctx, ir, idMap } = await setup();
+    const outcome = await runPlan(plan, ctx, { hooks: noSleep });
+    const verify = await verifyMigration(
+      plan,
+      idMap.entries("run1"),
+      fake.client,
+    );
+    const records = [...outcome.records.entries()].map(([seq, r]) => ({
+      seq,
+      ...r,
+    }));
+    const md = renderMigrationReport({
+      ir,
+      plan,
+      records,
+      verify,
+      target: { url: "http://dokploy.test", version: "v0.31.4" },
+      generatedAt: "2026-11-23T00:00:00Z",
+    });
+    expect(md).toContain("Nothing was deployed");
+    expect(md).toContain("| application | web |");
+    expect(md).toContain("`LOCKED`"); // unreadable secret listed by key name
+    expect(md).toContain("New database password");
+    expect(md).toContain("pg_dump");
+    expect(md).toContain("web.acme.test");
+    expect(md).toContain("Revoke");
+    expect(md).not.toMatch(/CANARY_/);
   });
 });
