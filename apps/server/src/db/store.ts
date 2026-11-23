@@ -118,11 +118,9 @@ export class Store {
     dataDir: string,
     private readonly masterKey: string,
   ) {
+    if (dataDir !== ":memory:") mkdirSync(dataDir, { recursive: true });
     const location =
-      dataDir === ":memory:"
-        ? ":memory:"
-        : (mkdirSync(dataDir, { recursive: true }),
-          join(dataDir, "migrator.db"));
+      dataDir === ":memory:" ? ":memory:" : join(dataDir, "migrator.db");
     this.db = new Database(location);
     this.db.pragma("foreign_keys = ON");
     this.db.pragma("journal_mode = WAL");
@@ -232,17 +230,18 @@ export class Store {
   ): void {
     const sets: string[] = ["updated_at = ?", "expires_at = ?"];
     const values: unknown[] = [Date.now(), Date.now() + RUN_TTL];
-    if (patch.status !== undefined)
-      sets.push("status = ?"), values.push(patch.status);
+    const set = (column: string, value: unknown) => {
+      sets.push(`${column} = ?`);
+      values.push(value);
+    };
+    if (patch.status !== undefined) set("status", patch.status);
     if (patch.options !== undefined)
-      sets.push("options_json = ?"), values.push(JSON.stringify(patch.options));
-    if (patch.ir !== undefined)
-      sets.push("ir_json = ?"), values.push(JSON.stringify(patch.ir));
+      set("options_json", JSON.stringify(patch.options));
+    if (patch.ir !== undefined) set("ir_json", JSON.stringify(patch.ir));
     if (patch.plan !== undefined)
-      sets.push("plan_json = ?"),
-        values.push(patch.plan === null ? null : JSON.stringify(patch.plan));
+      set("plan_json", patch.plan === null ? null : JSON.stringify(patch.plan));
     if (patch.dokployVersion !== undefined)
-      sets.push("dokploy_version = ?"), values.push(patch.dokployVersion);
+      set("dokploy_version", patch.dokployVersion);
     this.db
       .prepare(`UPDATE runs SET ${sets.join(", ")} WHERE id = ?`)
       .run(...values, id);
