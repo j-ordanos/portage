@@ -133,8 +133,8 @@ export function createApp(options: AppOptions) {
         } catch {
           return c.json({ message: "Invalid Origin header" }, 403);
         }
-        // Same host, or the one public address the operator declared (needed when a front end such as Vercel
-        // forwards /api here: the browser's Origin is the front end's address, not this server's).
+        // Same host, or the one public address the operator declared (needed behind a proxy that forwards
+        // /api here: the browser's Origin is the proxy's address, not this server's).
         if (
           parsed.host !== c.req.header("Host") &&
           parsed.origin !== publicOrigin

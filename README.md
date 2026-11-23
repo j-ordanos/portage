@@ -23,7 +23,7 @@ It does not copy data (database contents, volume files) or deployment history. T
 1. Create an **Application** in Dokploy from this repository.
 2. Build type: **Dockerfile**.
 3. Add a **volume mount** at `/data`.
-4. Add a domain with HTTPS to container port `3000`, and deploy.
+4. Add a domain with HTTPS to container port `3000` (for example `portage.launchpad.et`), and deploy.
 5. Open the site and create your account. The first account is always allowed.
 
 No environment variables are required. See the table below to harden it.
@@ -38,19 +38,9 @@ No environment variables are required. See the table below to harden it.
 | `ALLOW_SIGNUP` | `true` | Set `false` to stop others creating accounts once yours exists. |
 | `UPSTREAM_ALLOW_PRIVATE` | `true` | Allow Coolify/Dokploy on private addresses. Set `false` on a public instance. |
 | `UPSTREAM_ALLOWED_HOSTS` | none | Optional comma-separated allow-list of hosts. |
-| `PUBLIC_URL` | none | Your public `https://` address. Enables secure cookies and HSTS. |
+| `PUBLIC_URL` | none | Your public `https://` address, for example `https://portage.launchpad.et`. Enables secure cookies and HSTS. |
 
 Back up `DATA_DIR` **together with the key**. Without it, saved tokens cannot be decrypted and must be added again.
-
-## Website on Vercel (optional)
-
-Vercel can host the website, but not the server: Portage keeps a SQLite file and runs migrations in the background, which needs a permanent disk and long-lived processes. The simplest setup is everything on Dokploy (above). To put the website on Vercel anyway:
-
-1. Deploy the server on Dokploy and set `PUBLIC_URL` to the Vercel address (for example `https://portage.vercel.app`).
-2. In `vercel.json`, replace `YOUR-PORTAGE-SERVER.example.com` (two places) with your server's host.
-3. Import the repository in Vercel. Build settings come from `vercel.json`.
-
-Requests to `/api`, including the tokens you save, pass through Vercel to your server. This setup is not tested on a real Vercel account yet. The full walkthrough is in the app under Docs.
 
 ## Tested with
 
