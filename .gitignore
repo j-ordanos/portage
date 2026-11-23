@@ -1,0 +1,24 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+!.env.lab.example
+data
+apps/server/data
+*.db
+*.db-*
+
+# dev-only guides / agent notes (not for the public repo)
+/[0-9][0-9]-*.md
+/docs/STATUS.md
+/docs/DECISIONS.md
+/docs/BLOCKERS.md
+/docs/CHECKPOINT-LOG.md
+/securebrowser
+/.claude
+CLAUDE.md
+
+# recorded lab responses (contain lab hosts/ids)
+/lab/fixtures/*
+!/lab/fixtures/.gitkeep

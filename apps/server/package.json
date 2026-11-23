@@ -1,0 +1,28 @@
+{
+  "name": "@migrator/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && pnpm --dir ../web build && node -e \"require('node:fs').rmSync('dist/web',{recursive:true,force:true});require('node:fs').cpSync('../web/dist','dist/web',{recursive:true})\"",
+    "dev": "pnpm --dir ../web build && node -e \"require('node:fs').rmSync('dist/web',{recursive:true,force:true});require('node:fs').cpSync('../web/dist','dist/web',{recursive:true})\" && PORT=3001 tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "hash-password": "tsx src/hash-password.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.14.4",
+    "@migrator/core": "workspace:*",
+    "argon2": "0.44.0",
+    "better-sqlite3": "12.2.0",
+    "dotenv": "17.2.1",
+    "drizzle-orm": "0.44.2",
+    "hono": "4.7.11",
+    "zod": "3.25.67"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "tsx": "4.19.4"
+  }
+}
