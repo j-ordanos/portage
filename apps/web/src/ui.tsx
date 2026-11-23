@@ -18,30 +18,57 @@ export function Spinner({ label }: { label?: string }) {
   );
 }
 
-/** Icon + text + colour, never colour alone. */
+/** Icon + word + colour: status is never colour alone. */
 export function CompatBadge({ compat }: { compat: Compat }) {
   const map = {
     auto: {
       icon: <CheckCircle2 size={14} aria-hidden="true" />,
       text: "Ready",
-      cls: "ok",
+      tone: "ok",
     },
     partial: {
       icon: <AlertTriangle size={14} aria-hidden="true" />,
-      text: "Review",
-      cls: "warn",
+      text: "Needs a look",
+      tone: "warn",
     },
     manual: {
       icon: <Hand size={14} aria-hidden="true" />,
       text: "Manual",
-      cls: "bad",
+      tone: "bad",
     },
   }[compat];
   return (
-    <span className={`badge ${map.cls}`}>
+    <span className={`badge ${map.tone}`}>
       {map.icon}
       {map.text}
     </span>
+  );
+}
+
+export function Alert({
+  tone,
+  icon,
+  children,
+}: {
+  tone: "ok" | "warn" | "bad";
+  icon?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`alert ${tone}`}
+      role={tone === "bad" ? "alert" : undefined}
+    >
+      {icon ??
+        (tone === "ok" ? (
+          <CheckCircle2 size={18} aria-hidden="true" />
+        ) : tone === "warn" ? (
+          <AlertTriangle size={18} aria-hidden="true" />
+        ) : (
+          <XCircle size={18} aria-hidden="true" />
+        ))}
+      <div>{children}</div>
+    </div>
   );
 }
 
@@ -55,41 +82,15 @@ export function ErrorBox({
   onRetry?: () => void;
 }) {
   return (
-    <div className="alert bad" role="alert">
-      <XCircle size={18} aria-hidden="true" />
-      <div>
-        <strong>{message}</strong>
-        {hint ? <p>{hint}</p> : null}
-        {onRetry ? (
-          <button type="button" className="btn small" onClick={onRetry}>
-            {copy.common.retry}
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-export function Stepper({ stage }: { stage: number }) {
-  return (
-    <ol className="stepper" aria-label="Progress">
-      {copy.steps.map((label, index) => (
-        <li
-          key={label}
-          className={index < stage ? "done" : index === stage ? "current" : ""}
-          aria-current={index === stage ? "step" : undefined}
-        >
-          <span className="dot">
-            {index < stage ? (
-              <CheckCircle2 size={14} aria-hidden="true" />
-            ) : (
-              index + 1
-            )}
-          </span>
-          {label}
-        </li>
-      ))}
-    </ol>
+    <Alert tone="bad">
+      <strong>{message}</strong>
+      {hint ? <p>{hint}</p> : null}
+      {onRetry ? (
+        <button type="button" className="btn small" onClick={onRetry}>
+          {copy.common.retry}
+        </button>
+      ) : null}
+    </Alert>
   );
 }
 

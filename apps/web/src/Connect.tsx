@@ -1,3 +1,4 @@
+import { ArrowRight, Check, ShieldCheck } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { api, errorText } from "./api";
 import { copy } from "./copy";
@@ -31,6 +32,7 @@ export function Connect({
 
   const insecure =
     /^http:\/\//i.test(coolifyUrl) || /^http:\/\//i.test(dokployUrl);
+  const busy = phase !== "idle";
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -52,19 +54,26 @@ export function Connect({
     } catch (e) {
       setError(errorText(e));
       setPhase("idle");
-      if (runId) onRun(runId, false); // connection worked, scan failed: let the user retry from the next screen
+      if (runId) onRun(runId, false); // connected, but the scan failed: retry from the next screen
     }
   };
 
   return (
-    <main>
+    <main className="main">
       <h1>{copy.connect.title}</h1>
-      <p className="muted">{copy.connect.lead}</p>
+      <p className="lede">{copy.connect.lead}</p>
+
       <form onSubmit={submit}>
-        <div className="grid two">
-          <fieldset className="card">
-            <legend>{copy.connect.coolify}</legend>
-            <label>
+        <div className="docks">
+          <fieldset
+            className="dock"
+            data-live={phase === "scanning"}
+            disabled={busy}
+            style={{ margin: 0 }}
+          >
+            <h2>{copy.connect.coolify}</h2>
+            <p className="role">{copy.connect.coolifyRole}</p>
+            <label className="field">
               {copy.connect.url}
               <input
                 type="url"
@@ -74,7 +83,7 @@ export function Connect({
                 required
               />
             </label>
-            <label>
+            <label className="field">
               {copy.connect.token}
               <input
                 type="password"
@@ -86,9 +95,28 @@ export function Connect({
               />
             </label>
           </fieldset>
-          <fieldset className="card">
-            <legend>{copy.connect.dokploy}</legend>
-            <label>
+          <div
+            className="bridge"
+            data-state={busy ? "live" : "idle"}
+            aria-hidden="true"
+          >
+            <span className="joint">
+              {phase === "scanning" ? (
+                <Check size={18} />
+              ) : (
+                <ArrowRight size={18} />
+              )}
+            </span>
+          </div>
+          <fieldset
+            className="dock"
+            data-live={phase === "scanning"}
+            disabled={busy}
+            style={{ margin: 0 }}
+          >
+            <h2>{copy.connect.dokploy}</h2>
+            <p className="role">{copy.connect.dokployRole}</p>
+            <label className="field">
               {copy.connect.url}
               <input
                 type="url"
@@ -98,7 +126,7 @@ export function Connect({
                 required
               />
             </label>
-            <label>
+            <label className="field">
               {copy.connect.apiKey}
               <input
                 type="password"
@@ -111,6 +139,16 @@ export function Connect({
             </label>
           </fieldset>
         </div>
+
+        <ul className="promise">
+          {copy.connect.promises.map((line) => (
+            <li key={line}>
+              <ShieldCheck size={16} aria-hidden="true" />
+              {line}
+            </li>
+          ))}
+        </ul>
+
         {insecure ? (
           <label className="check">
             <input
@@ -118,52 +156,51 @@ export function Connect({
               checked={http}
               onChange={(e) => setHttp(e.target.checked)}
             />
-            {copy.connect.http}
+            <span>{copy.connect.http}</span>
           </label>
         ) : null}
-        <ul className="notice">
-          {copy.connect.notice.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
         <label className="check">
           <input
             type="checkbox"
             checked={accepted}
             onChange={(e) => setAccepted(e.target.checked)}
           />
-          {copy.connect.accept}
+          <span>{copy.connect.accept}</span>
         </label>
         {error ? <ErrorBox message={error.message} hint={error.hint} /> : null}
-        <button
-          className="btn primary"
-          type="submit"
-          disabled={!accepted || phase !== "idle" || (insecure && !http)}
-        >
-          {phase === "idle" ? (
-            copy.connect.submit
-          ) : (
-            <Spinner
-              label={
-                phase === "connecting" ? "Connecting…" : copy.connect.scanning
-              }
-            />
-          )}
-        </button>
+        <div className="actions">
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={!accepted || busy || (insecure && !http)}
+          >
+            {busy ? (
+              <Spinner
+                label={
+                  phase === "connecting"
+                    ? copy.connect.connecting
+                    : copy.connect.scanning
+                }
+              />
+            ) : (
+              copy.connect.submit
+            )}
+          </button>
+        </div>
       </form>
 
-      <section aria-labelledby="prev">
+      <section className="history" aria-labelledby="prev">
         <h2 id="prev">{copy.connect.previous}</h2>
         {runs.length === 0 ? (
           <p className="muted">{copy.connect.none}</p>
         ) : (
-          <ul className="runs">
+          <ul>
             {runs.map((r) => (
               <li key={r.id}>
                 <div>
                   <strong>{r.name}</strong>
                   <div className="muted small">
-                    {r.status} · {when(r.updatedAt)}
+                    {r.status.replace("_", " ")} · {when(r.updatedAt)}
                   </div>
                 </div>
                 <button

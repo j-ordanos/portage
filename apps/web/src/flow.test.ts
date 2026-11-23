@@ -67,3 +67,27 @@ describe("groupSteps", () => {
     });
   });
 });
+
+describe("rename preview", () => {
+  it("adds the marker until the name is free, ignoring case", async () => {
+    const { renamed } = await import("./Choose");
+    expect(renamed("name-saver", ["Name-Saver", "Other"], "*")).toBe(
+      "name-saver*",
+    );
+    expect(renamed("name-saver", ["Name-Saver", "name-saver*"], "*")).toBe(
+      "name-saver**",
+    );
+    expect(renamed("fresh", ["Name-Saver"], "*")).toBe("fresh");
+    expect(renamed("a", ["A"], "-copy")).toBe("a-copy");
+  });
+});
+
+describe("todoItems", () => {
+  it("takes only the manual to-do section of the report", async () => {
+    const { todoItems } = await import("./Finish");
+    const md =
+      "# Report\n\n## Created\n- [ ] not this\n\n## Manual to-do\n\n- [ ] **Relink Git** for `web`\n- [ ] Enter values\n\n## Data\n- [ ] nor this\n";
+    expect(todoItems(md)).toEqual(["**Relink Git** for `web`", "Enter values"]);
+    expect(todoItems("# nothing")).toEqual([]);
+  });
+});

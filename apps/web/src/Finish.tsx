@@ -1,9 +1,32 @@
-import { Download, ShieldAlert } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { CircleCheck, Download, ShieldAlert } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api, errorText } from "./api";
 import { copy } from "./copy";
 import type { RollbackPreview, RunView, VerifyCheck } from "./types";
-import { Dialog, ErrorBox, Spinner } from "./ui";
+import { Alert, Dialog, ErrorBox, Spinner } from "./ui";
+
+/** The to-do items from the report's "Manual to-do" section, in order. */
+export function todoItems(markdown: string): string[] {
+  const start = markdown.indexOf("## Manual to-do");
+  if (start < 0) return [];
+  const rest = markdown.slice(start + 15);
+  const end = rest.search(/\n## /);
+  return (end < 0 ? rest : rest.slice(0, end))
+    .split("\n")
+    .map((line) => /^- \[ \] (.+)$/.exec(line)?.[1])
+    .filter((x): x is string => Boolean(x));
+}
+
+/** Render `**bold**` and `` `code` `` from the report text without ever using HTML injection. */
+function inline(text: string): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) => {
+    const key = `${i}-${part}`;
+    if (part.startsWith("**"))
+      return <strong key={key}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith("`")) return <code key={key}>{part.slice(1, -1)}</code>;
+    return part;
+  });
+}
 
 export function Finish({
   runId,
@@ -15,13 +38,14 @@ export function Finish({
   const [run, setRun] = useState<RunView | null>(null);
   const [checks, setChecks] = useState<VerifyCheck[] | null>(null);
   const [report, setReport] = useState<string | null>(null);
+  const [done, setDone] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<{ message: string; hint?: string } | null>(
     null,
   );
   const [rollback, setRollback] = useState<RollbackPreview | null>(null);
   const [phrase, setPhrase] = useState("");
   const [busy, setBusy] = useState(false);
-  const [newKey, setNewKey] = useState<string | null>(null);
+  const [newKey, setNewKey] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -41,8 +65,12 @@ export function Finish({
           ).checks,
         );
       }
-      if (r.hasPlan)
+      if (r.hasPlan) {
         setReport(await api<string>("GET", `/runs/${runId}/report.md`));
+        setDone(
+          await api<Record<string, boolean>>("GET", `/runs/${runId}/checklist`),
+        );
+      }
     } catch (e) {
       setError(errorText(e));
     }
@@ -51,17 +79,22 @@ export function Finish({
     void load();
   }, [load]);
 
+  const tick = async (id: string, value: boolean) => {
+    setDone((prev) => ({ ...prev, [id]: value }));
+    await api("PUT", `/runs/${runId}/checklist`, {
+      item: id,
+      done: value,
+    }).catch(() => undefined);
+  };
   const reenter = async () => {
-    if (!newKey) return;
     try {
       await api("PUT", `/runs/${runId}/credentials`, { dokployApiKey: newKey });
-      setNewKey(null); // the key now lives only on the server
+      setNewKey(""); // the key now lives only on the server
       await load();
     } catch (e) {
       setError(errorText(e));
     }
   };
-
   const openRollback = async () => {
     setError(null);
     try {
@@ -89,40 +122,45 @@ export function Finish({
   };
 
   if (!run)
-    return error ? (
-      <ErrorBox message={error.message} hint={error.hint} />
-    ) : (
-      <Spinner />
+    return (
+      <main className="main">
+        {error ? (
+          <ErrorBox message={error.message} hint={error.hint} />
+        ) : (
+          <Spinner />
+        )}
+      </main>
     );
   const failed = checks?.filter((c) => c.status === "fail") ?? [];
   const rolledBack = run.status === "rolled_back";
+  const todo = report ? todoItems(report) : [];
 
   return (
-    <main>
-      <h1>{rolledBack ? "Rolled back" : copy.finish.title}</h1>
-      {rolledBack ? (
-        <div className="alert ok">
-          Everything this tool created in Dokploy was deleted.
-        </div>
-      ) : (
-        <div className="alert ok">{copy.finish.deployed}</div>
-      )}
+    <main className="main">
+      <h1>{rolledBack ? "Rolled back" : "Everything is in Dokploy"}</h1>
+      <p className="lede">
+        {rolledBack
+          ? "Everything this tool created in Dokploy was deleted. Coolify was never touched."
+          : copy.finish.deployed}
+      </p>
 
       {!rolledBack ? (
-        <section className="card">
-          <h2>Verification</h2>
-          {!run.credentialsActive ? (
-            <div className="alert warn">
-              <div>
-                The API credentials for this run expired. Enter the Dokploy key
+        <>
+          <section className="section" style={{ marginTop: 0 }}>
+            <h2>Read back from Dokploy</h2>
+            {!run.credentialsActive ? (
+              <Alert tone="warn">
+                The saved keys for this run expired. Enter the Dokploy API key
                 again to verify or roll back.
-                <div className="row">
+                <div className="row" style={{ marginTop: "0.5rem" }}>
                   <input
+                    className="select"
+                    style={{ minWidth: "16rem" }}
                     type="password"
                     autoComplete="off"
                     spellCheck={false}
                     aria-label="Dokploy API key"
-                    value={newKey ?? ""}
+                    value={newKey}
                     onChange={(e) => setNewKey(e.target.value)}
                   />
                   <button
@@ -134,56 +172,96 @@ export function Finish({
                     Save key
                   </button>
                 </div>
+              </Alert>
+            ) : checks === null ? (
+              <Spinner label={copy.finish.verifying} />
+            ) : failed.length === 0 ? (
+              <p className="verdict">
+                <CircleCheck size={20} aria-hidden="true" />
+                {copy.finish.verified} {checks.length} checks: sources, build
+                types, environment keys, domains, mounts, databases.
+              </p>
+            ) : (
+              <Alert tone="bad">
+                <strong>
+                  {failed.length} of {checks.length} checks failed
+                </strong>
+                <ul className="notes">
+                  {failed.map((c) => (
+                    <li key={`${c.resource}${c.check}`}>
+                      {c.resource}: {c.check}
+                      {c.detail ? ` (${c.detail})` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </Alert>
+            )}
+          </section>
+
+          <section className="section">
+            <h2>
+              {todo.length > 0
+                ? "What still needs you"
+                : "Nothing else needs you"}
+            </h2>
+            {todo.length > 0 ? (
+              <ul className="todo">
+                {todo.map((item, i) => {
+                  const id = `todo:${i}`;
+                  return (
+                    <li key={id}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={done[id] === true}
+                          onChange={(e) => void tick(id, e.target.checked)}
+                        />
+                        <span>{inline(item)}</span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="muted">
+                Open the report below for the cutover checklist.
+              </p>
+            )}
+          </section>
+
+          {report ? (
+            <section className="section">
+              <div className="row">
+                <h2 className="grow">{copy.finish.report}</h2>
+                <a
+                  className="btn small"
+                  href={`/api/runs/${runId}/report.md`}
+                  download="migration-report.md"
+                >
+                  <Download size={14} aria-hidden="true" />{" "}
+                  {copy.finish.download}
+                </a>
+                <a
+                  className="btn small"
+                  href={`/api/runs/${runId}/manifest.json`}
+                  download="manifest.json"
+                >
+                  {copy.finish.manifest}
+                </a>
               </div>
-            </div>
-          ) : checks === null ? (
-            <Spinner label={copy.finish.verifying} />
-          ) : failed.length === 0 ? (
-            <p className="ok-text">
-              {copy.finish.verified} ({checks.length} checks)
-            </p>
-          ) : (
-            <ul>
-              {failed.map((c) => (
-                <li key={`${c.resource}${c.check}`} className="bad-text">
-                  {c.resource}: {c.check} {c.detail ? `(${c.detail})` : ""}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+              <pre className="report">{report}</pre>
+            </section>
+          ) : null}
+        </>
       ) : null}
 
-      {report && !rolledBack ? (
-        <section className="card">
-          <div className="row">
-            <h2 className="grow">{copy.finish.report}</h2>
-            <a
-              className="btn small"
-              href={`/api/runs/${runId}/report.md`}
-              download="migration-report.md"
-            >
-              <Download size={14} aria-hidden="true" /> {copy.finish.download}
-            </a>
-            <a
-              className="btn small"
-              href={`/api/runs/${runId}/manifest.json`}
-              download="manifest.json"
-            >
-              {copy.finish.manifest}
-            </a>
-          </div>
-          <pre className="report">{report}</pre>
-        </section>
-      ) : null}
-
-      <div className="alert warn">
+      <div className="alert warn" style={{ marginTop: "1.6rem" }}>
         <ShieldAlert size={18} aria-hidden="true" />
         <div>{copy.finish.revoke}</div>
       </div>
       {error ? <ErrorBox message={error.message} hint={error.hint} /> : null}
 
-      <section className="card danger-zone">
+      <section className="danger-zone">
         {!rolledBack ? (
           <>
             <h2>{copy.finish.rollbackTitle}</h2>
@@ -224,7 +302,7 @@ export function Finish({
                 </li>
               ))}
             </ul>
-            <label>
+            <label className="field">
               {copy.finish.rollbackPhrase}:{" "}
               <code>{rollback.confirmPhrase}</code>
               <input

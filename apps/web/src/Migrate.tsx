@@ -100,7 +100,7 @@ export function Migrate({
   const paused = run.status === "paused" || run.status === "paused_failed";
 
   return (
-    <main>
+    <main className="main">
       <h1>
         {run.status === "paused_failed"
           ? copy.migrate.failed
@@ -118,7 +118,7 @@ export function Migrate({
       >
         <span style={{ width: `${(finished / total) * 100}%` }} />
       </div>
-      <p className="muted" aria-live="polite">
+      <p className="muted" aria-live="polite" style={{ marginTop: 0 }}>
         {finished} of {run.progress.total} steps
         {current ? ` — ${current.label}` : ""}
       </p>
@@ -198,10 +198,10 @@ export function Migrate({
       ) : null}
       {error ? <ErrorBox message={error.message} hint={error.hint} /> : null}
 
-      <div className="grid two">
-        <section className="card">
+      <div className="two">
+        <section>
           <h2>Steps</h2>
-          <ol className="steps">
+          <ol className="timeline">
             {steps.map((s) => (
               <li key={s.seq} className={s.state}>
                 {ICON[s.state]}
@@ -210,7 +210,7 @@ export function Migrate({
             ))}
           </ol>
         </section>
-        <section className="card">
+        <section>
           <h2>{copy.migrate.log}</h2>
           <div className="log" aria-live="polite">
             {log.map((l) => (

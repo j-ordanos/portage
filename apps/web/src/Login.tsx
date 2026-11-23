@@ -1,3 +1,4 @@
+import { Container } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { ApiError, api } from "./api";
 import { copy } from "./copy";
@@ -28,12 +29,15 @@ export function Login({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <main className="narrow">
-      <h1>{copy.product}</h1>
-      <p className="muted">{copy.tagline}</p>
-      <form className="card" onSubmit={submit}>
-        <h2>{copy.signIn.title}</h2>
-        <label>
+    <main className="login">
+      <div className="brand">
+        <Container size={24} aria-hidden="true" />
+        {copy.product}
+      </div>
+      <h1 style={{ marginTop: "1.4rem" }}>{copy.signIn.title}</h1>
+      <p className="lede">{copy.tagline}</p>
+      <form className="dock" onSubmit={submit}>
+        <label className="field">
           {copy.signIn.password}
           <input
             type="password"

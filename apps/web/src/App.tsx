@@ -1,15 +1,14 @@
-import { LogOut } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, api } from "./api";
 import { Choose } from "./Choose";
 import { Connect } from "./Connect";
-import { copy } from "./copy";
 import { Finish } from "./Finish";
 import { Login } from "./Login";
 import { Migrate } from "./Migrate";
 import { Review } from "./Review";
+import { Shell } from "./Shell";
 import { type RunView, stageOf } from "./types";
-import { Spinner, Stepper } from "./ui";
+import { Spinner } from "./ui";
 
 const STAGES = ["connect", "choose", "review", "migrate", "finish"] as const;
 
@@ -21,6 +20,7 @@ export function App() {
   const [auth, setAuth] = useState<"loading" | "out" | "in">("loading");
   const [runId, setRunId] = useState<string | null>(readHash());
   const [stage, setStage] = useState<(typeof STAGES)[number]>("connect");
+  const [run, setRun] = useState<RunView | null>(null);
 
   const checkAuth = useCallback(() => {
     api("GET", "/auth/me")
@@ -32,15 +32,17 @@ export function App() {
   const open = useCallback(async (id: string | null) => {
     if (!id) {
       window.location.hash = "";
+      setRun(null);
       setRunId(null);
       setStage("connect");
       return;
     }
     try {
-      const run = await api<RunView>("GET", `/runs/${id}`);
+      const fetched = await api<RunView>("GET", `/runs/${id}`);
       window.location.hash = `#/run/${id}`;
+      setRun(fetched);
       setRunId(id);
-      setStage(stageOf(run.status));
+      setStage(stageOf(fetched.status));
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) setAuth("out");
       else {
@@ -64,40 +66,35 @@ export function App() {
   if (auth === "loading") return <Spinner />;
   if (auth === "out") return <Login onDone={checkAuth} />;
 
+  const page =
+    stage === "connect" || !runId ? (
+      <Connect onRun={(id) => void open(id)} />
+    ) : stage === "choose" ? (
+      <Choose runId={runId} onPlanned={() => void open(runId)} />
+    ) : stage === "review" ? (
+      <Review
+        runId={runId}
+        onBack={() => setStage("choose")}
+        onStarted={() => void open(runId)}
+      />
+    ) : stage === "migrate" ? (
+      <Migrate
+        runId={runId}
+        onFinished={() => void open(runId)}
+        onRollback={() => setStage("finish")}
+      />
+    ) : (
+      <Finish runId={runId} onGone={() => void open(null)} />
+    );
+
   return (
-    <div className="shell">
-      <header className="topbar">
-        <a href="#/" className="brand" onClick={() => void open(null)}>
-          {copy.product}
-        </a>
-        <Stepper stage={STAGES.indexOf(stage)} />
-        <button
-          type="button"
-          className="btn small"
-          onClick={() => void signOut()}
-        >
-          <LogOut size={14} aria-hidden="true" /> {copy.common.signOut}
-        </button>
-      </header>
-      {stage === "connect" || !runId ? (
-        <Connect onRun={(id) => void open(id)} />
-      ) : stage === "choose" ? (
-        <Choose runId={runId} onPlanned={() => void open(runId)} />
-      ) : stage === "review" ? (
-        <Review
-          runId={runId}
-          onBack={() => setStage("choose")}
-          onStarted={() => void open(runId)}
-        />
-      ) : stage === "migrate" ? (
-        <Migrate
-          runId={runId}
-          onFinished={() => void open(runId)}
-          onRollback={() => setStage("finish")}
-        />
-      ) : (
-        <Finish runId={runId} onGone={() => void open(null)} />
-      )}
-    </div>
+    <Shell
+      stage={STAGES.indexOf(stage)}
+      run={run}
+      onHome={() => void open(null)}
+      onSignOut={() => void signOut()}
+    >
+      {page}
+    </Shell>
   );
 }

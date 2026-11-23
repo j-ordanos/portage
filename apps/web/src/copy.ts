@@ -1,6 +1,6 @@
 /** Every user-visible string lives here so wording can change without touching components. */
 export const copy = {
-  product: "Coolify → Dokploy Migrator",
+  product: "Coolify to Dokploy",
   tagline:
     "Recreate your Coolify projects in Dokploy: structure and settings, not data.",
   steps: ["Connect", "Choose", "Review", "Migrate", "Finish"],
@@ -12,25 +12,29 @@ export const copy = {
     tooMany: "Too many attempts. Wait a minute and try again.",
   },
   connect: {
-    title: "Connect your two servers",
-    lead: "Use a temporary Coolify token and a Dokploy API key created for this migration. Coolify is only read; Dokploy only gets new resources.",
-    coolify: "Coolify (source)",
-    dokploy: "Dokploy (target)",
-    url: "Base URL",
+    title: "Move your projects from Coolify to Dokploy",
+    lead: "We copy structure and settings: build type, repository, domains, environment variables, volumes and databases. Your data and deployment history stay where they are.",
+    coolify: "Coolify",
+    coolifyRole: "Where your projects live now",
+    dokploy: "Dokploy",
+    dokployRole: "Where they are going",
+    url: "Address",
     token: "API token",
     apiKey: "API key",
-    http: "Allow insecure http:// for this server",
-    notice: [
-      "Your tokens are sent to this server (not to third parties) and stored encrypted. Run this tool on infrastructure you control.",
-      "A Coolify token that can read sensitive values can read every secret on that instance. Revoke it afterwards.",
-      "This tool never deploys anything and never changes Coolify.",
+    http: "This server uses http://, not https://. Allow it.",
+    promises: [
+      "Coolify is only read. Nothing there is changed.",
+      "Dokploy only receives new resources, and none are deployed.",
+      "Tokens are stored encrypted here and deleted when you finish.",
     ],
-    accept: "I understand",
+    accept:
+      "I run this tool on a server I control, and I will revoke both tokens afterwards.",
     submit: "Connect and scan",
+    connecting: "Connecting to both servers…",
     scanning: "Reading your Coolify projects…",
-    previous: "Previous migrations",
+    previous: "Earlier migrations",
     open: "Open",
-    none: "No previous migrations.",
+    none: "Nothing yet. Your migrations will be listed here.",
   },
   choose: {
     title: "Choose what to migrate",

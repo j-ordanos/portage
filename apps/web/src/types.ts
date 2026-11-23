@@ -81,6 +81,10 @@ export interface UserOptions {
   serverId?: string;
   domainPolicy: "keep-original" | "temp-suffix" | "custom";
   tempBase?: string;
+  gitOverrides: Record<
+    string,
+    { githubId?: string; sshKeyId?: string; url?: boolean }
+  >;
 }
 export interface LogEvent {
   id: number;
@@ -133,3 +137,37 @@ export function stageOf(
   return "connect";
 }
 export type RollbackPreview = Rollback;
+
+export type GitLink =
+  | { kind: "github"; githubId: string; label: string; reason: string }
+  | { kind: "ssh"; sshKeyId: string; label: string; reason: string }
+  | { kind: "url"; reason: string };
+
+export interface GitResource {
+  srcId: string;
+  name: string;
+  project: string;
+  repo: string;
+  branch: string;
+  provider: string;
+  coolify: { appName?: string; appOrg?: string; keyName?: string };
+  resolved: GitLink;
+  candidates: {
+    github: Array<{
+      githubId: string;
+      label: string;
+      hasAccess: boolean | null;
+    }>;
+    ssh: Array<{
+      sshKeyId: string;
+      label: string;
+      match: "fingerprint" | "name" | null;
+    }>;
+  };
+  overridden: boolean;
+}
+export interface GitView {
+  github: Array<{ githubId: string; label: string; reposKnown: boolean }>;
+  ssh: Array<{ sshKeyId: string; label: string }>;
+  resources: GitResource[];
+}

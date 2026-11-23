@@ -432,6 +432,8 @@ export function createApp(options: AppOptions) {
 
   // ---- static SPA ----
   const types: Record<string, string> = {
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
     ".css": "text/css",
     ".js": "text/javascript",
     ".svg": "image/svg+xml",
