@@ -8,7 +8,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "./auth";
-import { AUTHOR, Logo, VERSION } from "./brand";
+import { AUTHOR, Logo, REPOSITORY, VERSION } from "./brand";
 import { go } from "./router";
 import { ThemeSwitch } from "./theme";
 
@@ -40,7 +40,7 @@ export function Landing({
           </a>
           <nav className="nav" aria-label="Main">
             <a href="#/docs">Docs</a>
-            <a href={AUTHOR.github} target="_blank" rel="noreferrer">
+            <a href={REPOSITORY} target="_blank" rel="noreferrer">
               <Github size={16} aria-hidden="true" /> GitHub
             </a>
           </nav>
@@ -176,7 +176,7 @@ export function Landing({
         <span className="links">
           <a href="#/docs">Documentation</a>
           <a href="#/docs/security">Security</a>
-          <a href={AUTHOR.github} target="_blank" rel="noreferrer">
+          <a href={REPOSITORY} target="_blank" rel="noreferrer">
             GitHub
           </a>
         </span>

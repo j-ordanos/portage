@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useAuth } from "./auth";
-import { AUTHOR, Logo, VERSION } from "./brand";
+import { AUTHOR, Logo, REPOSITORY, VERSION } from "./brand";
 import type { Route } from "./router";
 import { ThemeSwitch } from "./theme";
 import { hostOf } from "./ui";
@@ -143,7 +143,7 @@ export function Footer() {
         <span className="links">
           <a href="#/docs">Docs</a>
           <a href="#/docs/security">Security</a>
-          <a href={AUTHOR.github} target="_blank" rel="noreferrer">
+          <a href={REPOSITORY} target="_blank" rel="noreferrer">
             GitHub
           </a>
         </span>

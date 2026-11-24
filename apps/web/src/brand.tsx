@@ -34,4 +34,6 @@ export const AUTHOR = {
   name: "Yordanos",
   github: "https://github.com/j-ordanos",
 } as const;
+
+export const REPOSITORY = "https://github.com/j-ordanos/portage";
 export const VERSION = "0.1.0";

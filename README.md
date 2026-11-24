@@ -1,6 +1,10 @@
 # Portage
 
+[![Portage](docs/portage.jpg)](https://portage.launchpad.et)
+
 Move your projects from **Coolify** to **Dokploy**.
+
+**Live:** [portage.launchpad.et](https://portage.launchpad.et) · **Source:** [github.com/j-ordanos/portage](https://github.com/j-ordanos/portage)
 
 Portage recreates your Coolify projects in Dokploy: build types, Git repositories, Docker Compose files, domains, environment variables, volumes and databases. You review the exact plan first, nothing is deployed, nothing in Coolify is changed, and everything it creates can be rolled back.
 
